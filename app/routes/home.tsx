@@ -1,19 +1,43 @@
-import { env } from "cloudflare:workers";
+export default function Home() {
+  return (
+    <main style={{ display: "grid", placeItems: "center", minHeight: "100vh" }}>
+      <style>{`
+        @keyframes spinAndBounce {
+          0% {
+            transform: rotate(0deg) scale(1);
+          }
+          50% {
+            transform: rotate(180deg) scale(2);
+          }
+          100% {
+            transform: rotate(360deg) scale(1);
+          }
+        }
+        .spinning-bouncing-logo {
+          animation: spinAndBounce 1.2s linear infinite;
+        }
+      `}</style>
 
-import type { Route } from "./+types/home";
-import { Welcome } from "../welcome/welcome";
+      <img 
+        src="/signature.jpg" 
+        alt="Logo" 
+        className="spinning-bouncing-logo"
+        style={{ width: "150px", height: "auto" }}
+      />
+    </main>
+  );
+}
 
-export function meta({}: Route.MetaArgs) {
+export function meta() {
   return [
-    { title: "New React Router App" },
-    { name: "description", content: "Welcome to React Router!" },
+    { title: "Donghoon Yi" },
+    { name: "description", content: "Welcome to my website!" },
   ];
 }
 
-export function loader() {
-  return { message: env.VALUE_FROM_CLOUDFLARE };
-}
+export const links = () => [
+  { rel: "icon", href: "/signature.jpg", type: "image/x-icon" },
 
-export default function Home({ loaderData }: Route.ComponentProps) {
-  return <Welcome message={loaderData.message} />;
-}
+
+
+];
