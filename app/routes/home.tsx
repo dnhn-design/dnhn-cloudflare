@@ -1,5 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 
+export function meta() {
+  return [{ title: "dnhn canvas" }];
+}
+
+export function links() {
+  return [
+    { rel: "icon", href: "/favicon.ico", sizes: "any" },
+    { rel: "icon", type: "image/png", href: "/favicon.png" },
+  ];
+}
+
 // ---- Text physics (tweak the feel here) ----
 const RADIUS = 140;
 const PUSH = 1.4;
