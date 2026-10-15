@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import Bento from "../Bento";
+import { PORTFOLIO } from "../portfolio";
 
 export function meta() {
   return [{ title: "dnhn canvas" }];
@@ -36,8 +38,9 @@ const STYLES = [
 
 type StyleId = (typeof STYLES)[number]["id"];
 
+// "ink" is a special color that follows the theme (white in dark mode, near-black in light mode)
 const COLORS = [
-  "#f5f5f7",
+  "ink",
   "#ff5a5f",
   "#ff9f43",
   "#feca57",
@@ -48,12 +51,15 @@ const COLORS = [
   "#ff6bd6",
 ];
 
+type Theme = "dark" | "light";
+const inkFor = (t: Theme) => (t === "dark" ? "#f5f5f7" : "#16161d");
+
 type Brush = { color: string; style: StyleId; size: number };
 type Pt = { x: number; y: number };
 type StrokeOp = { kind: "stroke"; brush: Brush; seed: number; pts: Pt[] };
 type Op = StrokeOp | { kind: "clear" };
 type TabData = { ops: Op[]; cursor: number };
-type Tab = { id: number; name: string };
+type CanvasTab = { id: string; name: string };
 
 type Particle = {
   el: HTMLElement;
@@ -119,19 +125,17 @@ function Ring(props: { slices: Slice[]; r0: number; r1: number }) {
         return (
           <g
             key={s.id}
+            className="clickable"
             onClick={s.onSelect}
             style={{
-              cursor: "pointer",
               opacity: s.disabled ? 0.35 : 1,
               pointerEvents: s.disabled ? "none" : "auto",
             }}
           >
             <path
-              className={s.fill ? "pie-color" : "pie-dark"}
+              className={(s.fill ? "pie-color" : "pie-dark") + (s.active ? " pie-active" : "")}
               d={wedge(r0, r1, a0, a1)}
-              fill={s.fill ?? "rgba(28,28,36,0.95)"}
-              stroke={s.active ? "#ffffff" : "rgba(255,255,255,0.16)"}
-              strokeWidth={s.active ? 2.5 : 1}
+              fill={s.fill}
             />
             {hasIcon && (
               <text
@@ -140,8 +144,8 @@ function Ring(props: { slices: Slice[]; r0: number; r1: number }) {
                 textAnchor="middle"
                 dominantBaseline="central"
                 fontSize={18}
-                fill={s.iconColor ?? "#f5f5f7"}
-                style={{ pointerEvents: "none", userSelect: "none" }}
+                className={s.iconColor ? undefined : "pie-text"}
+                style={{ fill: s.iconColor, pointerEvents: "none", userSelect: "none" }}
               >
                 {s.icon}
               </text>
@@ -153,7 +157,7 @@ function Ring(props: { slices: Slice[]; r0: number; r1: number }) {
                 textAnchor="middle"
                 dominantBaseline="central"
                 fontSize={11}
-                fill="#f5f5f7"
+                className="pie-text"
                 style={{ pointerEvents: "none", userSelect: "none" }}
               >
                 {s.label}
@@ -178,17 +182,19 @@ function mulberry32(seed: number) {
 }
 
 // Draws strokes onto a canvas context. Used for live drawing and for replaying history.
-function createPainter(ctx: CanvasRenderingContext2D) {
+function createPainter(ctx: CanvasRenderingContext2D, getInk: () => string) {
   let b: Brush = { color: "#ffffff", style: "solid", size: 8 };
   let last: Pt = { x: 0, y: 0 };
   let carry = 0; // distance since last dot (dotted)
   let pathDist = 0; // distance along the stroke (dashed)
   let rnd: () => number = Math.random;
 
+  const col = () => (b.color === "ink" ? getInk() : b.color);
+
   const prep = () => {
     ctx.globalCompositeOperation = b.style === "eraser" ? "destination-out" : "source-over";
-    ctx.strokeStyle = b.color;
-    ctx.fillStyle = b.color;
+    ctx.strokeStyle = col();
+    ctx.fillStyle = col();
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
     ctx.shadowBlur = 0;
@@ -216,7 +222,7 @@ function createPainter(ctx: CanvasRenderingContext2D) {
       return;
     }
     if (b.style === "neon") {
-      ctx.shadowColor = b.color;
+      ctx.shadowColor = col();
       ctx.shadowBlur = b.size * 2;
       dot(x, y, b.size / 2);
       ctx.shadowBlur = 0;
@@ -312,7 +318,7 @@ function createPainter(ctx: CanvasRenderingContext2D) {
       }
 
       case "neon": {
-        ctx.shadowColor = b.color;
+        ctx.shadowColor = col();
         ctx.shadowBlur = b.size * 2;
         ctx.lineWidth = b.size;
         ctx.beginPath();
@@ -352,13 +358,24 @@ export default function Home() {
     refresh: () => {},
   });
 
-  // Tabs (session only: drawings live in memory and disappear on reload)
-  const [tabs, setTabs] = useState<Tab[]>([{ id: 1, name: "Canvas 1" }]);
-  const [activeId, setActiveId] = useState(1);
-  const dataRef = useRef<Map<number, TabData>>(new Map([[1, { ops: [], cursor: 0 }]]));
-  const activeRef = useRef(1);
+  // ---- Theme ----
+  const [theme, setTheme] = useState<Theme>("dark");
+  const themeRef = useRef<Theme>(theme);
+  themeRef.current = theme;
+  const cssColor = (c: string) => (c === "ink" ? inkFor(theme) : c);
+
+  // ---- Tabs ----
+  // Canvas tabs are session-only (drawings live in memory). The first one is permanent.
+  // Portfolio tabs come from portfolio.ts and can't be closed.
+  const [canvases, setCanvases] = useState<CanvasTab[]>([{ id: "c1", name: "Canvas" }]);
+  const [activeTab, setActiveTab] = useState("c1");
+  const dataRef = useRef<Map<string, TabData>>(new Map([["c1", { ops: [], cursor: 0 }]]));
+  const activeCanvasRef = useRef("c1"); // which canvas the drawing surface is showing
   const nextIdRef = useRef(2);
   const counterRef = useRef(1);
+  const onCanvas = !activeTab.startsWith("p:");
+  const onCanvasRef = useRef(true);
+  onCanvasRef.current = onCanvas;
 
   const [brush, setBrush] = useState<Brush>({ color: "#48dbfb", style: "solid", size: 8 });
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
@@ -370,6 +387,32 @@ export default function Home() {
   const menuOpenRef = useRef(false);
   menuOpenRef.current = menu !== null;
 
+  // Load saved theme (or follow the system setting the first time)
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("dnhn-theme");
+      if (saved === "light" || saved === "dark") {
+        setTheme(saved);
+        return;
+      }
+    } catch {
+      // storage unavailable, ignore
+    }
+    if (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches) {
+      setTheme("light");
+    }
+  }, []);
+
+  const toggleTheme = () => {
+    const next: Theme = theme === "dark" ? "light" : "dark";
+    setTheme(next);
+    try {
+      localStorage.setItem("dnhn-theme", next);
+    } catch {
+      // ignore
+    }
+  };
+
   // Keep the cursor ring in sync with brush settings
   useEffect(() => {
     const ring = ringRef.current;
@@ -377,8 +420,9 @@ export default function Home() {
     const d = Math.max(brush.size * (brush.style === "eraser" ? 1.5 : 1), 6);
     ring.style.width = d + "px";
     ring.style.height = d + "px";
-    ring.style.borderColor = brush.style === "eraser" ? "#ffffff" : brush.color;
-  }, [brush]);
+    ring.style.borderColor = brush.style === "eraser" ? inkFor(theme) : cssColor(brush.color);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [brush, theme]);
 
   // Hide the cursor ring while the pie menu is open
   useEffect(() => {
@@ -472,24 +516,24 @@ export default function Home() {
     };
   }, []);
 
-  // ---------- Drawing, undo / redo, tabs ----------
+  // ---------- Drawing, undo / redo ----------
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const painter = createPainter(ctx);
+    const painter = createPainter(ctx, () => inkFor(themeRef.current));
 
     let current: StrokeOp | null = null;
     let drawing = false;
 
-    // History of the active tab. Stored as strokes, so it survives window resizing.
+    // History of the canvas tab being shown. Stored as strokes, so it survives resizing.
     const cur = (): TabData => {
-      let d = dataRef.current.get(activeRef.current);
+      let d = dataRef.current.get(activeCanvasRef.current);
       if (!d) {
         d = { ops: [], cursor: 0 };
-        dataRef.current.set(activeRef.current, d);
+        dataRef.current.set(activeCanvasRef.current, d);
       }
       return d;
     };
@@ -574,7 +618,7 @@ export default function Home() {
     };
 
     const onDown = (e: PointerEvent) => {
-      if (e.button !== 0 || e.ctrlKey || menuOpenRef.current) return;
+      if (e.button !== 0 || e.ctrlKey || menuOpenRef.current || !onCanvasRef.current) return;
       drawing = true;
       canvas.setPointerCapture(e.pointerId);
       const p = { x: e.clientX, y: e.clientY };
@@ -590,7 +634,8 @@ export default function Home() {
         ring.style.transform =
           "translate(" + e.clientX + "px, " + e.clientY + "px) translate(-50%, -50%)";
         const overBar = !!tabBarRef.current && tabBarRef.current.contains(e.target as Node);
-        ring.style.opacity = menuOpenRef.current || overBar ? "0" : "1";
+        const hide = menuOpenRef.current || overBar || !onCanvasRef.current;
+        ring.style.opacity = hide ? "0" : "1";
       }
       if (!drawing || !current) return;
       const p = { x: e.clientX, y: e.clientY };
@@ -610,6 +655,8 @@ export default function Home() {
     let wheelAcc = 0;
     let lastStepAt = 0;
     const onWheel = (e: WheelEvent) => {
+      if (!onCanvasRef.current) return; // let portfolio tabs scroll normally
+      if (tabBarRef.current && tabBarRef.current.contains(e.target as Node)) return;
       e.preventDefault();
       const unit = e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1;
       wheelAcc += e.deltaY * unit;
@@ -626,8 +673,12 @@ export default function Home() {
     };
 
     const onContext = (e: MouseEvent) => {
+      if (tabBarRef.current && tabBarRef.current.contains(e.target as Node)) {
+        e.preventDefault();
+        return;
+      }
+      if (!onCanvasRef.current) return; // normal browser menu on portfolio tabs
       e.preventDefault();
-      if (tabBarRef.current && tabBarRef.current.contains(e.target as Node)) return;
       if (drawing) onUp();
       const mx = Math.min(Math.max(e.clientX, PIE_R), Math.max(window.innerWidth - PIE_R, PIE_R));
       const my = Math.min(Math.max(e.clientY, PIE_R), Math.max(window.innerHeight - PIE_R, PIE_R));
@@ -645,6 +696,7 @@ export default function Home() {
         setMenu(null);
         return;
       }
+      if (!onCanvasRef.current) return;
       if (e.metaKey || e.ctrlKey) {
         const k = e.key.toLowerCase();
         if (k === "z") {
@@ -684,34 +736,47 @@ export default function Home() {
     };
   }, []);
 
-  // ---------- Tab actions ----------
-  const selectTab = (id: number) => {
-    activeRef.current = id;
-    setActiveId(id);
-    setMenu(null);
+  // Repaint when the theme changes so "ink" strokes switch color
+  useEffect(() => {
     actionsRef.current.refresh();
+  }, [theme]);
+
+  // ---------- Tab actions ----------
+  const selectTab = (id: string) => {
+    setActiveTab(id);
+    setMenu(null);
+    if (!id.startsWith("p:")) {
+      activeCanvasRef.current = id;
+      actionsRef.current.refresh();
+    }
   };
 
-  const addTab = () => {
-    const id = nextIdRef.current;
+  const addCanvas = () => {
+    const id = "c" + nextIdRef.current;
     nextIdRef.current += 1;
     counterRef.current += 1;
     dataRef.current.set(id, { ops: [], cursor: 0 });
-    setTabs((t) => [...t, { id, name: "Canvas " + counterRef.current }]);
+    setCanvases((list) => [...list, { id, name: "Canvas " + counterRef.current }]);
     selectTab(id);
   };
 
-  const closeTab = (id: number) => {
-    if (tabs.length <= 1) return;
+  const closeCanvas = (id: string) => {
+    if (id === "c1") return;
     const d = dataRef.current.get(id);
     if (d && d.cursor > 0 && !window.confirm("Close this canvas? Its drawing will be lost.")) {
       return;
     }
-    const idx = tabs.findIndex((t) => t.id === id);
-    const rest = tabs.filter((t) => t.id !== id);
+    const idx = canvases.findIndex((c) => c.id === id);
+    if (idx < 1) return;
+    const fallback = canvases[idx - 1].id;
     dataRef.current.delete(id);
-    setTabs(rest);
-    if (id === activeId) selectTab(rest[Math.min(idx, rest.length - 1)].id);
+    setCanvases(canvases.filter((c) => c.id !== id));
+    if (activeTab === id) {
+      selectTab(fallback);
+    } else if (activeCanvasRef.current === id) {
+      activeCanvasRef.current = fallback;
+      actionsRef.current.refresh();
+    }
   };
 
   // ---------- Pie menu content ----------
@@ -728,7 +793,7 @@ export default function Home() {
     {
       id: "color",
       icon: "●",
-      iconColor: brush.color,
+      iconColor: cssColor(brush.color),
       label: "Color",
       active: sub === "color",
       onSelect: () => setSub((s) => (s === "color" ? null : "color")),
@@ -772,7 +837,7 @@ export default function Home() {
     ...COLORS.map((c) => ({
       id: c,
       label: "",
-      fill: c,
+      fill: cssColor(c),
       active: brush.color === c,
       onSelect: () => {
         setBrush((b) => ({ ...b, color: c, style: b.style === "eraser" ? "solid" : b.style }));
@@ -795,37 +860,121 @@ export default function Home() {
   ];
 
   const previewR = Math.min(Math.max(brush.size / 2, 2), 20);
+  const portfolioTab = PORTFOLIO.find((p) => "p:" + p.id === activeTab);
+
+  const canvasTabEl = (c: CanvasTab) => {
+    const permanent = c.id === "c1";
+    return (
+      <div
+        key={c.id}
+        className={
+          "tab-item clickable" + (activeTab === c.id ? " active" : "") + (permanent ? "" : " closable")
+        }
+        onClick={() => selectTab(c.id)}
+      >
+        {c.name}
+        {!permanent && (
+          <span
+            className="tab-x clickable"
+            title="Close canvas"
+            onClick={(e) => {
+              e.stopPropagation();
+              closeCanvas(c.id);
+            }}
+          >
+            ×
+          </span>
+        )}
+      </div>
+    );
+  };
 
   return (
     <main
+      data-theme={theme}
       style={{
         position: "fixed",
         inset: 0,
-        background: "#0b0b0f",
-        color: "#f5f5f7",
+        background: "var(--bg)",
+        color: "var(--fg)",
         overflow: "hidden",
         fontFamily: 'ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
         touchAction: "none",
-        cursor: menu ? "default" : "none",
+        colorScheme: theme,
       }}
     >
       <style>{`
+        main[data-theme="dark"] {
+          --bg: #0b0b0f; --fg: #f5f5f7; --muted: rgba(245,245,247,0.6);
+          --panel: rgba(255,255,255,0.06); --border: rgba(255,255,255,0.13);
+          --bar: rgba(16,16,22,0.96); --ph: #26262d;
+          --pie-bg: rgba(28,28,36,0.95); --pie-hover: rgba(78,78,104,0.98);
+        }
+        main[data-theme="light"] {
+          --bg: #f4f4f1; --fg: #16161d; --muted: rgba(22,22,29,0.6);
+          --panel: rgba(0,0,0,0.05); --border: rgba(0,0,0,0.14);
+          --bar: rgba(250,250,247,0.96); --ph: #d9d9d6;
+          --pie-bg: rgba(255,255,255,0.96); --pie-hover: rgba(222,222,232,0.98);
+        }
+
+        /* Custom cursors (files live in public/cursors). Numbers = hotspot x y. */
+        main {
+          --cursor-default: url("/cursors/cursor.png") 3 28, auto;
+          --cursor-hover: url("/cursors/cursor-hover.png") 4 28, pointer;
+          --cursor-pressed: url("/cursors/cursor-pressed.png") 3 28, pointer;
+          cursor: var(--cursor-default);
+        }
+        main * { cursor: inherit; }
+        main .clickable { cursor: var(--cursor-hover); }
+        main .clickable:active { cursor: var(--cursor-pressed); }
+
         @keyframes pieIn {
           from { opacity: 0; transform: scale(0.7); }
           to { opacity: 1; transform: scale(1); }
         }
-        .pie-dark { transition: fill 0.12s; }
-        .pie-dark:hover { fill: rgba(78, 78, 104, 0.98); }
-        .pie-color { transition: filter 0.12s; }
-        .pie-color:hover { filter: brightness(1.3); }
-        .tab-item:hover { background: rgba(255,255,255,0.07) !important; }
-        .tab-x:hover { opacity: 1 !important; background: rgba(255,255,255,0.15); }
-        .tab-bar::-webkit-scrollbar { display: none; }
+        .pie-dark { fill: var(--pie-bg); stroke: var(--border); stroke-width: 1; transition: fill 0.12s; }
+        .pie-dark:hover { fill: var(--pie-hover); }
+        .pie-color { stroke: var(--border); stroke-width: 1; transition: filter 0.12s; }
+        .pie-color:hover { filter: brightness(1.18); }
+        .pie-active { stroke: var(--fg) !important; stroke-width: 2.5 !important; }
+        .pie-text { fill: var(--fg); }
+        .pie-center { fill: var(--pie-bg); stroke: var(--border); stroke-width: 1; }
+
+        .tab-scroll { scrollbar-width: none; }
+        .tab-scroll::-webkit-scrollbar { display: none; }
+        .tab-item {
+          display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 14px;
+          border-radius: 8px 8px 0 0; font-size: 13px; white-space: nowrap; flex-shrink: 0;
+          color: var(--muted); border: 1px solid transparent; border-bottom: none;
+        }
+        .tab-item.closable { padding-right: 8px; }
+        .tab-item:hover { background: var(--panel); }
+        .tab-item.active { background: var(--bg); color: var(--fg); border-color: var(--border); }
+        .tab-x {
+          width: 18px; height: 18px; border-radius: 4px; display: inline-flex;
+          align-items: center; justify-content: center; font-size: 14px; line-height: 1; opacity: 0.5;
+        }
+        .tab-x:hover { opacity: 1; background: var(--border); }
+        .tab-sep { width: 1px; height: 16px; background: var(--border); align-self: center; margin: 0 4px; flex-shrink: 0; }
+        .icon-btn {
+          width: 28px; height: 28px; border-radius: 8px; border: none; padding: 0; flex-shrink: 0;
+          display: inline-flex; align-items: center; justify-content: center;
+          background: var(--panel); color: var(--fg);
+        }
+        .icon-btn:hover { background: var(--border); }
       `}</style>
 
-      <canvas ref={canvasRef} style={{ position: "absolute", inset: 0, zIndex: 0 }} />
+      <canvas
+        ref={canvasRef}
+        style={{
+          position: "absolute",
+          inset: 0,
+          zIndex: 0,
+          visibility: onCanvas ? "visible" : "hidden",
+        }}
+      />
 
-      {/* "Hello." in the top-left corner (doesn't block drawing) */}
+      {/* "Hello." in the top-left corner (only visible on canvas tabs, doesn't block drawing) */}
       <div
         style={{
           position: "absolute",
@@ -834,6 +983,8 @@ export default function Home() {
           padding: "20px 36px",
           pointerEvents: "none",
           zIndex: 1,
+          opacity: onCanvas ? 1 : 0,
+          transition: "opacity 0.2s",
         }}
       >
         <div
@@ -854,10 +1005,29 @@ export default function Home() {
         </div>
       </div>
 
+      {/* Portfolio view */}
+      {portfolioTab && (
+        <div
+          style={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            top: TAB_BAR_H,
+            bottom: 0,
+            overflowY: "auto",
+            padding: "28px 32px 64px",
+            background: "var(--bg)",
+            zIndex: 2,
+            touchAction: "pan-y",
+          }}
+        >
+          <Bento key={portfolioTab.id} tab={portfolioTab} />
+        </div>
+      )}
+
       {/* Tab bar */}
       <div
         ref={tabBarRef}
-        className="tab-bar"
         style={{
           position: "fixed",
           top: 0,
@@ -866,91 +1036,89 @@ export default function Home() {
           height: TAB_BAR_H,
           display: "flex",
           alignItems: "flex-end",
-          gap: 3,
           padding: "0 10px",
-          background: "rgba(16,16,22,0.96)",
-          borderBottom: "1px solid rgba(255,255,255,0.1)",
+          background: "var(--bar)",
+          borderBottom: "1px solid var(--border)",
           zIndex: 6,
-          cursor: "default",
-          overflowX: "auto",
           userSelect: "none",
         }}
       >
-        {tabs.map((t) => {
-          const active = t.id === activeId;
-          return (
-            <div
-              key={t.id}
-              className="tab-item"
-              onClick={() => selectTab(t.id)}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                height: 30,
-                padding: "0 10px 0 14px",
-                borderRadius: "8px 8px 0 0",
-                fontSize: 13,
-                whiteSpace: "nowrap",
-                cursor: "pointer",
-                background: active ? "#0b0b0f" : "transparent",
-                color: active ? "#f5f5f7" : "rgba(245,245,247,0.6)",
-                border: active
-                  ? "1px solid rgba(255,255,255,0.14)"
-                  : "1px solid transparent",
-                borderBottom: "none",
-              }}
-            >
-              {t.name}
-              {tabs.length > 1 && (
-                <span
-                  className="tab-x"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    closeTab(t.id);
-                  }}
-                  title="Close canvas"
-                  style={{
-                    width: 18,
-                    height: 18,
-                    borderRadius: 4,
-                    display: "inline-flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                    fontSize: 14,
-                    lineHeight: 1,
-                    opacity: 0.5,
-                  }}
-                >
-                  ×
-                </span>
-              )}
-            </div>
-          );
-        })}
-        <button
-          onClick={addTab}
-          title="New canvas"
+        <div
+          className="tab-scroll"
           style={{
-            alignSelf: "center",
-            width: 26,
-            height: 26,
-            marginLeft: 4,
-            borderRadius: 6,
-            border: "none",
-            background: "rgba(255,255,255,0.08)",
-            color: "#f5f5f7",
-            fontSize: 16,
-            lineHeight: 1,
-            cursor: "pointer",
-            flexShrink: 0,
+            display: "flex",
+            alignItems: "flex-end",
+            gap: 3,
+            flex: 1,
+            minWidth: 0,
+            height: "100%",
+            overflowX: "auto",
           }}
         >
-          +
+          {canvasTabEl(canvases[0])}
+
+          {PORTFOLIO.length > 0 && <span className="tab-sep" />}
+          {PORTFOLIO.map((p) => (
+            <div
+              key={p.id}
+              className={"tab-item clickable" + (activeTab === "p:" + p.id ? " active" : "")}
+              onClick={() => selectTab("p:" + p.id)}
+            >
+              {p.title}
+            </div>
+          ))}
+
+          {canvases.length > 1 && <span className="tab-sep" />}
+          {canvases.slice(1).map((c) => canvasTabEl(c))}
+
+          <button
+            className="icon-btn clickable"
+            onClick={addCanvas}
+            title="New canvas"
+            style={{ alignSelf: "center", marginLeft: 4, fontSize: 16, lineHeight: 1 }}
+          >
+            +
+          </button>
+        </div>
+
+        <button
+          className="icon-btn clickable"
+          onClick={toggleTheme}
+          title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+          aria-label="Toggle light and dark mode"
+          style={{ alignSelf: "center", marginLeft: 10 }}
+        >
+          {theme === "dark" ? (
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+            >
+              <circle cx="12" cy="12" r="4" />
+              <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+            </svg>
+          ) : (
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z" />
+            </svg>
+          )}
         </button>
       </div>
 
-      {/* Brush size ring that follows the cursor */}
+      {/* Brush size ring that follows the cursor (canvas tabs only) */}
       <div
         ref={ringRef}
         style={{
@@ -961,35 +1129,18 @@ export default function Home() {
           height: 8,
           border: "1.5px solid #48dbfb",
           borderRadius: "50%",
+          boxShadow: "0 0 0 1px rgba(0,0,0,0.35), inset 0 0 0 1px rgba(255,255,255,0.25)",
           pointerEvents: "none",
           zIndex: 5,
           opacity: 0,
-          mixBlendMode: "difference",
         }}
       />
-
-      <div
-        style={{
-          position: "fixed",
-          bottom: 14,
-          left: 0,
-          right: 0,
-          textAlign: "center",
-          fontSize: 12,
-          opacity: 0.4,
-          pointerEvents: "none",
-          zIndex: 2,
-        }}
-      >
-        Left click: draw · Right click: menu · Scroll or [ ]: thickness ({brush.size}px) · Ctrl/⌘+Z
-        undo · Ctrl/⌘+Shift+Z redo
-      </div>
 
       {/* Hidden color picker used by the "+" custom color slice */}
       <input
         ref={colorInputRef}
         type="color"
-        value={brush.color}
+        value={cssColor(brush.color)}
         tabIndex={-1}
         onChange={(e) => {
           const v = e.target.value;
@@ -1032,24 +1183,23 @@ export default function Home() {
             <Ring slices={mainSlices} r0={RING1.r0} r1={RING1.r1} />
 
             {/* Center: shows current brush, click to close */}
-            <g onClick={close} style={{ cursor: "pointer", pointerEvents: "auto" }}>
-              <circle
-                r={30}
-                fill="rgba(28,28,36,0.95)"
-                stroke="rgba(255,255,255,0.2)"
-                strokeWidth={1}
-              />
+            <g className="clickable" onClick={close} style={{ pointerEvents: "auto" }}>
+              <circle className="pie-center" r={30} />
               {brush.style === "eraser" ? (
                 <circle
+                  className="pie-text"
                   r={previewR}
                   fill="none"
-                  stroke="#ffffff"
+                  stroke="currentColor"
                   strokeWidth={1.5}
                   strokeDasharray="3 3"
-                  style={{ pointerEvents: "none" }}
+                  style={{ pointerEvents: "none", stroke: "var(--fg)", fill: "none" }}
                 />
               ) : (
-                <circle r={previewR} fill={brush.color} style={{ pointerEvents: "none" }} />
+                <circle
+                  r={previewR}
+                  style={{ pointerEvents: "none", fill: cssColor(brush.color) }}
+                />
               )}
             </g>
           </svg>
