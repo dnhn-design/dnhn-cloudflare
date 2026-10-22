@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import Bento from "../Bento";
 import { PORTFOLIO } from "../portfolio";
 
@@ -12,6 +12,12 @@ export function links() {
     { rel: "icon", type: "image/png", href: "/favicon.png" },
   ];
 }
+
+// ---- Greeting text (top-left) ----
+// Right-click the text on the page to edit it (edits last until the page is reloaded).
+// To change what everyone sees by default, change this line:
+const DEFAULT_GREETING = "Hello. My Name is Donghoon";
+const GREETING_MAX_LENGTH = 120;
 
 // ---- Text physics (tweak the feel here) ----
 const RADIUS = 140;
@@ -56,8 +62,13 @@ const inkFor = (t: Theme) => (t === "dark" ? "#f5f5f7" : "#16161d");
 
 type Brush = { color: string; style: StyleId; size: number };
 type Pt = { x: number; y: number };
-type StrokeOp = { kind: "stroke"; brush: Brush; seed: number; pts: Pt[] };
-type Op = StrokeOp | { kind: "clear" };
+type Rect = { x0: number; y0: number; x1: number; y1: number };
+type StrokeOp = { kind: "stroke"; id: number; brush: Brush; seed: number; pts: Pt[] };
+type MoveOp = { kind: "move"; ids: number[]; dx: number; dy: number };
+type DeleteOp = { kind: "delete"; ids: number[] };
+type Op = StrokeOp | MoveOp | DeleteOp | { kind: "clear" };
+type Tool = "draw" | "select";
+type Selection = { ids: number[]; x: number; y: number; w: number; h: number };
 type TabData = { ops: Op[]; cursor: number };
 type CanvasTab = { id: string; name: string };
 
@@ -70,6 +81,41 @@ type Particle = {
   vx: number;
   vy: number;
 };
+
+// How far a stroke's paint reaches beyond its center line (used for selecting + the selection box)
+function strokePad(b: Brush) {
+  let r = b.size / 2;
+  if (b.style === "eraser") r = b.size * 0.75;
+  if (b.style === "spray") r = b.size * 1.5;
+  if (b.style === "double") r = b.size * 0.8 + b.size / 6;
+  if (b.style === "neon") r = b.size;
+  return r + 1;
+}
+
+// Does the line segment a-b touch the rectangle r? (Liang-Barsky clipping)
+function segHitsRect(a: Pt, b: Pt, r: Rect) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const p = [-dx, dx, -dy, dy];
+  const q = [a.x - r.x0, r.x1 - a.x, a.y - r.y0, r.y1 - a.y];
+  let t0 = 0;
+  let t1 = 1;
+  for (let i = 0; i < 4; i++) {
+    if (p[i] === 0) {
+      if (q[i] < 0) return false;
+    } else {
+      const t = q[i] / p[i];
+      if (p[i] < 0) {
+        if (t > t1) return false;
+        if (t > t0) t0 = t;
+      } else {
+        if (t < t0) return false;
+        if (t < t1) t1 = t;
+      }
+    }
+  }
+  return true;
+}
 
 // ---- Pie menu geometry ----
 const PIE_R = 160; // outer radius of the whole menu (px)
@@ -350,13 +396,63 @@ export default function Home() {
   const menuRef = useRef<HTMLDivElement>(null);
   const tabBarRef = useRef<HTMLDivElement>(null);
   const colorInputRef = useRef<HTMLInputElement>(null);
+  const marqueeRef = useRef<HTMLDivElement>(null);
+  const selBoxRef = useRef<HTMLDivElement>(null);
+  const taRef = useRef<HTMLTextAreaElement>(null);
 
   const actionsRef = useRef({
     undo: () => {},
     redo: () => {},
     clear: () => {},
     refresh: () => {},
+    deselect: () => {},
+    deleteSelection: () => {},
   });
+
+  // ---- Select tool ----
+  const [tool, setTool] = useState<Tool>("draw");
+  const toolRef = useRef<Tool>(tool);
+  toolRef.current = tool;
+  const [sel, setSel] = useState<Selection | null>(null);
+  const selRef = useRef<Selection | null>(null); // written by the drawing handlers
+  const strokeIdRef = useRef(0);
+
+  // ---- Greeting text (right-click it to edit) ----
+  const [greeting, setGreeting] = useState(DEFAULT_GREETING);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const editingRef = useRef(false);
+  editingRef.current = editing;
+  const shown = editing ? draft : greeting;
+  const startEditRef = useRef<() => void>(() => {});
+
+  const startEdit = () => {
+    if (editingRef.current) return;
+    setDraft(greeting);
+    setEditing(true);
+    setMenu(null);
+  };
+  startEditRef.current = startEdit;
+
+  const finishEdit = (save: boolean) => {
+    if (!editingRef.current) return;
+    const v = draft.trim();
+    if (save && v) setGreeting(v); // an empty box keeps the old text
+    setEditing(false);
+  };
+
+  // Focus the text box and select everything when editing starts
+  useEffect(() => {
+    if (!editing) return;
+    const id = window.setTimeout(() => {
+      const ta = taRef.current;
+      if (ta) {
+        ta.focus();
+        ta.select();
+      }
+    }, 40);
+    return () => window.clearTimeout(id);
+  }, [editing]);
 
   // ---- Theme ----
   const [theme, setTheme] = useState<Theme>("dark");
@@ -514,9 +610,10 @@ export default function Home() {
       window.removeEventListener("pointerup", onUp);
       document.removeEventListener("pointerleave", onLeave);
     };
-  }, []);
+    // Re-run whenever the text changes so every letter gets its own physics
+  }, [shown]);
 
-  // ---------- Drawing, undo / redo ----------
+  // ---------- Drawing, selection, undo / redo ----------
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -527,6 +624,14 @@ export default function Home() {
 
     let current: StrokeOp | null = null;
     let drawing = false;
+    let marquee: Rect | null = null;
+    let moving: { x0: number; y0: number; dx: number; dy: number } | null = null;
+    let liveRaf = 0;
+
+    const setSelection = (s: Selection | null) => {
+      selRef.current = s;
+      setSel(s);
+    };
 
     // History of the canvas tab being shown. Stored as strokes, so it survives resizing.
     const cur = (): TabData => {
@@ -550,8 +655,8 @@ export default function Home() {
       ctx.restore();
     };
 
-    const redraw = () => {
-      wipe();
+    // Replays history up to the cursor: which strokes exist, and where they are now.
+    const resolve = () => {
       const d = cur();
       let start = 0;
       for (let i = d.cursor - 1; i >= 0; i--) {
@@ -560,11 +665,40 @@ export default function Home() {
           break;
         }
       }
+      const strokes: StrokeOp[] = [];
+      const offsets = new Map<number, Pt>();
+      const gone = new Set<number>();
       for (let i = start; i < d.cursor; i++) {
         const op = d.ops[i];
         if (op.kind === "stroke") {
-          painter.begin(op.brush, op.pts[0], op.seed);
-          for (let j = 1; j < op.pts.length; j++) painter.segment(op.pts[j]);
+          strokes.push(op);
+        } else if (op.kind === "move") {
+          for (const id of op.ids) {
+            const o = offsets.get(id) ?? { x: 0, y: 0 };
+            offsets.set(id, { x: o.x + op.dx, y: o.y + op.dy });
+          }
+        } else if (op.kind === "delete") {
+          for (const id of op.ids) gone.add(id);
+        }
+      }
+      const out: { s: StrokeOp; ox: number; oy: number }[] = [];
+      for (const s of strokes) {
+        if (gone.has(s.id)) continue;
+        const o = offsets.get(s.id);
+        out.push({ s, ox: o ? o.x : 0, oy: o ? o.y : 0 });
+      }
+      return out;
+    };
+
+    const redraw = (live?: { ids: Set<number>; dx: number; dy: number }) => {
+      wipe();
+      for (const { s, ox, oy } of resolve()) {
+        const moved = !!live && live.ids.has(s.id);
+        const X = ox + (moved && live ? live.dx : 0);
+        const Y = oy + (moved && live ? live.dy : 0);
+        painter.begin(s.brush, { x: s.pts[0].x + X, y: s.pts[0].y + Y }, s.seed);
+        for (let j = 1; j < s.pts.length; j++) {
+          painter.segment({ x: s.pts[j].x + X, y: s.pts[j].y + Y });
         }
       }
     };
@@ -575,6 +709,81 @@ export default function Home() {
       d.ops.push(op);
       d.cursor = d.ops.length;
       sync();
+    };
+
+    // Strokes that touch the rectangle. Erasers ride along (so erased gaps move with the
+    // drawing) but never count as a selection on their own.
+    const pickIn = (r: Rect) => {
+      const ids: number[] = [];
+      let anyInk = false;
+      for (const { s, ox, oy } of resolve()) {
+        const pad = strokePad(s.brush);
+        const box = { x0: r.x0 - pad, y0: r.y0 - pad, x1: r.x1 + pad, y1: r.y1 + pad };
+        let hit = false;
+        const first = { x: s.pts[0].x + ox, y: s.pts[0].y + oy };
+        if (s.pts.length === 1) hit = segHitsRect(first, first, box);
+        for (let j = 1; j < s.pts.length && !hit; j++) {
+          const a = { x: s.pts[j - 1].x + ox, y: s.pts[j - 1].y + oy };
+          const b = { x: s.pts[j].x + ox, y: s.pts[j].y + oy };
+          hit = segHitsRect(a, b, box);
+        }
+        if (hit) {
+          ids.push(s.id);
+          if (s.brush.style !== "eraser") anyInk = true;
+        }
+      }
+      return anyInk ? ids : [];
+    };
+
+    // Box around the selected strokes (based on visible ink, not invisible eraser paths)
+    const boundsFor = (ids: number[]) => {
+      const want = new Set(ids);
+      const items = resolve().filter(({ s }) => want.has(s.id));
+      const ink = items.filter(({ s }) => s.brush.style !== "eraser");
+      const use = ink.length ? ink : items;
+      let x0 = Infinity;
+      let y0 = Infinity;
+      let x1 = -Infinity;
+      let y1 = -Infinity;
+      for (const { s, ox, oy } of use) {
+        const pad = strokePad(s.brush);
+        for (const p of s.pts) {
+          x0 = Math.min(x0, p.x + ox - pad);
+          y0 = Math.min(y0, p.y + oy - pad);
+          x1 = Math.max(x1, p.x + ox + pad);
+          y1 = Math.max(y1, p.y + oy + pad);
+        }
+      }
+      if (!isFinite(x0)) return null;
+      return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+    };
+
+    const showMarquee = () => {
+      const el = marqueeRef.current;
+      if (!el) return;
+      if (!marquee) {
+        el.style.display = "none";
+        return;
+      }
+      const x = Math.min(marquee.x0, marquee.x1);
+      const y = Math.min(marquee.y0, marquee.y1);
+      el.style.display = "block";
+      el.style.transform = "translate(" + x + "px, " + y + "px)";
+      el.style.width = Math.abs(marquee.x1 - marquee.x0) + "px";
+      el.style.height = Math.abs(marquee.y1 - marquee.y0) + "px";
+    };
+
+    // While dragging a selection, repaint with a temporary offset (committed on release)
+    const scheduleLive = () => {
+      if (liveRaf) return;
+      liveRaf = requestAnimationFrame(() => {
+        liveRaf = 0;
+        const s = selRef.current;
+        if (!moving || !s) return;
+        redraw({ ids: new Set(s.ids), dx: moving.dx, dy: moving.dy });
+        const box = selBoxRef.current;
+        if (box) box.style.transform = "translate(" + moving.dx + "px, " + moving.dy + "px)";
+      });
     };
 
     const resize = () => {
@@ -594,51 +803,98 @@ export default function Home() {
     actionsRef.current = {
       undo: () => {
         const d = cur();
-        if (current || d.cursor === 0) return;
+        if (current || moving || d.cursor === 0) return;
         d.cursor -= 1;
+        setSelection(null);
         redraw();
         sync();
       },
       redo: () => {
         const d = cur();
-        if (current || d.cursor >= d.ops.length) return;
+        if (current || moving || d.cursor >= d.ops.length) return;
         d.cursor += 1;
+        setSelection(null);
         redraw();
         sync();
       },
       clear: () => {
-        if (current) return;
+        if (current || moving) return;
         commit({ kind: "clear" });
+        setSelection(null);
         redraw();
       },
       refresh: () => {
         redraw();
         sync();
       },
+      deselect: () => setSelection(null),
+      deleteSelection: () => {
+        const s = selRef.current;
+        if (!s || current || moving) return;
+        commit({ kind: "delete", ids: s.ids });
+        setSelection(null);
+        redraw();
+      },
     };
 
     const onDown = (e: PointerEvent) => {
       if (e.button !== 0 || e.ctrlKey || menuOpenRef.current || !onCanvasRef.current) return;
-      drawing = true;
-      canvas.setPointerCapture(e.pointerId);
+      if (editingRef.current) return; // first click while editing text just finishes the edit
       const p = { x: e.clientX, y: e.clientY };
+      canvas.setPointerCapture(e.pointerId);
+
+      if (toolRef.current === "select") {
+        const s = selRef.current;
+        if (s && p.x >= s.x && p.x <= s.x + s.w && p.y >= s.y && p.y <= s.y + s.h) {
+          moving = { x0: p.x, y0: p.y, dx: 0, dy: 0 };
+        } else {
+          setSelection(null);
+          marquee = { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
+          showMarquee();
+        }
+        return;
+      }
+
+      drawing = true;
       const seed = Math.floor(Math.random() * 2147483647);
       const b = { ...brushRef.current };
       painter.begin(b, p, seed);
-      current = { kind: "stroke", brush: b, seed, pts: [p] };
+      strokeIdRef.current += 1;
+      current = { kind: "stroke", id: strokeIdRef.current, brush: b, seed, pts: [p] };
     };
 
     const onMove = (e: PointerEvent) => {
+      const p = { x: e.clientX, y: e.clientY };
+      const isSelect = toolRef.current === "select";
       const ring = ringRef.current;
       if (ring) {
-        ring.style.transform =
-          "translate(" + e.clientX + "px, " + e.clientY + "px) translate(-50%, -50%)";
+        ring.style.transform = "translate(" + p.x + "px, " + p.y + "px) translate(-50%, -50%)";
         const overBar = !!tabBarRef.current && tabBarRef.current.contains(e.target as Node);
-        const hide = menuOpenRef.current || overBar || !onCanvasRef.current;
+        const hide =
+          menuOpenRef.current || overBar || !onCanvasRef.current || isSelect || editingRef.current;
         ring.style.opacity = hide ? "0" : "1";
       }
+
+      if (moving) {
+        moving.dx = p.x - moving.x0;
+        moving.dy = p.y - moving.y0;
+        scheduleLive();
+        return;
+      }
+      if (marquee) {
+        marquee.x1 = p.x;
+        marquee.y1 = p.y;
+        showMarquee();
+        return;
+      }
+      if (isSelect) {
+        const s = selRef.current;
+        const inside = !!s && p.x >= s.x && p.x <= s.x + s.w && p.y >= s.y && p.y <= s.y + s.h;
+        canvas.style.cursor = inside ? "move" : "crosshair";
+        return;
+      }
+
       if (!drawing || !current) return;
-      const p = { x: e.clientX, y: e.clientY };
       if (painter.segment(p)) current.pts.push(p);
     };
 
@@ -647,6 +903,37 @@ export default function Home() {
       if (current) {
         commit(current);
         current = null;
+      }
+
+      if (moving) {
+        const m = moving;
+        moving = null;
+        const s = selRef.current;
+        const box = selBoxRef.current;
+        if (box) box.style.transform = "";
+        if (s && Math.hypot(m.dx, m.dy) >= 1) {
+          commit({ kind: "move", ids: s.ids, dx: m.dx, dy: m.dy });
+          setSelection({ ...s, x: s.x + m.dx, y: s.y + m.dy });
+        }
+        redraw();
+      }
+
+      if (marquee) {
+        const r = marquee;
+        marquee = null;
+        showMarquee();
+        const rect = {
+          x0: Math.min(r.x0, r.x1),
+          y0: Math.min(r.y0, r.y1),
+          x1: Math.max(r.x0, r.x1),
+          y1: Math.max(r.y0, r.y1),
+        };
+        // A tiny drag is just a click: it only clears the selection
+        if (rect.x1 - rect.x0 >= 3 || rect.y1 - rect.y0 >= 3) {
+          const ids = pickIn(rect);
+          const b = ids.length ? boundsFor(ids) : null;
+          if (b) setSelection({ ids, x: b.x, y: b.y, w: b.w, h: b.h });
+        }
       }
     };
 
@@ -658,6 +945,7 @@ export default function Home() {
       if (!onCanvasRef.current) return; // let portfolio tabs scroll normally
       if (tabBarRef.current && tabBarRef.current.contains(e.target as Node)) return;
       e.preventDefault();
+      if (editingRef.current || toolRef.current === "select") return;
       const unit = e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 400 : 1;
       wheelAcc += e.deltaY * unit;
       if (Math.abs(wheelAcc) < WHEEL_STEP) return;
@@ -673,13 +961,30 @@ export default function Home() {
     };
 
     const onContext = (e: MouseEvent) => {
-      if (tabBarRef.current && tabBarRef.current.contains(e.target as Node)) {
+      const target = e.target as HTMLElement | null;
+      if (target && target.tagName === "TEXTAREA") return; // normal browser menu while typing
+      if (tabBarRef.current && tabBarRef.current.contains(target as Node)) {
         e.preventDefault();
         return;
       }
       if (!onCanvasRef.current) return; // normal browser menu on portfolio tabs
       e.preventDefault();
-      if (drawing) onUp();
+      onUp(); // finish any stroke / selection drag in progress
+
+      // Right-click on the greeting text edits it
+      const box = textRef.current ? textRef.current.getBoundingClientRect() : null;
+      const slack = 10;
+      if (
+        box &&
+        e.clientX >= box.left - slack &&
+        e.clientX <= box.right + slack &&
+        e.clientY >= box.top - slack &&
+        e.clientY <= box.bottom + slack
+      ) {
+        startEditRef.current();
+        return;
+      }
+
       const mx = Math.min(Math.max(e.clientX, PIE_R), Math.max(window.innerWidth - PIE_R, PIE_R));
       const my = Math.min(Math.max(e.clientY, PIE_R), Math.max(window.innerHeight - PIE_R, PIE_R));
       setSub(null);
@@ -692,11 +997,22 @@ export default function Home() {
     };
 
     const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      const typing =
+        !!t &&
+        (t.tagName === "TEXTAREA" ||
+          (t.tagName === "INPUT" && (t as HTMLInputElement).type !== "color") ||
+          t.isContentEditable);
+      if (typing) return; // let the text box handle its own keys
+
       if (e.key === "Escape") {
-        setMenu(null);
+        if (menuOpenRef.current) setMenu(null);
+        else if (selRef.current) setSelection(null);
+        else if (toolRef.current === "select") setTool("draw");
         return;
       }
       if (!onCanvasRef.current) return;
+
       if (e.metaKey || e.ctrlKey) {
         const k = e.key.toLowerCase();
         if (k === "z") {
@@ -709,9 +1025,20 @@ export default function Home() {
         }
         return;
       }
-      // [ and ] nudge thickness by exactly 1px
-      if (e.key === "[") setBrush((b) => ({ ...b, size: Math.max(1, b.size - 1) }));
-      if (e.key === "]") setBrush((b) => ({ ...b, size: Math.min(80, b.size + 1) }));
+
+      if (e.key === "Delete" || e.key === "Backspace") {
+        if (selRef.current) {
+          e.preventDefault();
+          actionsRef.current.deleteSelection();
+        }
+        return;
+      }
+
+      const k = e.key.toLowerCase();
+      if (k === "v") setTool("select"); // V = select tool
+      else if (k === "b") setTool("draw"); // B = brush
+      else if (e.key === "[") setBrush((b) => ({ ...b, size: Math.max(1, b.size - 1) }));
+      else if (e.key === "]") setBrush((b) => ({ ...b, size: Math.min(80, b.size + 1) }));
     };
 
     canvas.addEventListener("pointerdown", onDown);
@@ -724,6 +1051,7 @@ export default function Home() {
     window.addEventListener("keydown", onKey);
 
     return () => {
+      cancelAnimationFrame(liveRaf);
       window.removeEventListener("resize", resize);
       canvas.removeEventListener("pointerdown", onDown);
       canvas.removeEventListener("pointerup", onUp);
@@ -741,10 +1069,22 @@ export default function Home() {
     actionsRef.current.refresh();
   }, [theme]);
 
+  // Switching tools: crosshair + no brush ring for select; leaving select drops the selection
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (canvas) canvas.style.cursor = tool === "select" ? "crosshair" : "";
+    if (tool === "select") {
+      if (ringRef.current) ringRef.current.style.opacity = "0";
+    } else {
+      actionsRef.current.deselect();
+    }
+  }, [tool]);
+
   // ---------- Tab actions ----------
   const selectTab = (id: string) => {
     setActiveTab(id);
     setMenu(null);
+    actionsRef.current.deselect();
     if (!id.startsWith("p:")) {
       activeCanvasRef.current = id;
       actionsRef.current.refresh();
@@ -775,6 +1115,7 @@ export default function Home() {
       selectTab(fallback);
     } else if (activeCanvasRef.current === id) {
       activeCanvasRef.current = fallback;
+      actionsRef.current.deselect();
       actionsRef.current.refresh();
     }
   };
@@ -797,6 +1138,16 @@ export default function Home() {
       label: "Color",
       active: sub === "color",
       onSelect: () => setSub((s) => (s === "color" ? null : "color")),
+    },
+    {
+      id: "select",
+      icon: "⬚",
+      label: "Select",
+      active: tool === "select",
+      onSelect: () => {
+        setTool((t) => (t === "select" ? "draw" : "select"));
+        close();
+      },
     },
     {
       id: "undo",
@@ -829,6 +1180,7 @@ export default function Home() {
     active: brush.style === s.id,
     onSelect: () => {
       setBrush((b) => ({ ...b, style: s.id }));
+      setTool("draw");
       close();
     },
   }));
@@ -841,6 +1193,7 @@ export default function Home() {
       active: brush.color === c,
       onSelect: () => {
         setBrush((b) => ({ ...b, color: c, style: b.style === "eraser" ? "solid" : b.style }));
+        setTool("draw");
         close();
       },
     })),
@@ -974,7 +1327,8 @@ export default function Home() {
         }}
       />
 
-      {/* "Hello." in the top-left corner (only visible on canvas tabs, doesn't block drawing) */}
+      {/* Greeting in the top-left corner. Right-click it to edit. Only visible on canvas tabs,
+          and doesn't block drawing. */}
       <div
         style={{
           position: "absolute",
@@ -990,20 +1344,142 @@ export default function Home() {
         <div
           ref={textRef}
           style={{
+            position: "relative",
             display: "flex",
-            fontSize: "clamp(2.5rem, 7vw, 5rem)",
+            flexWrap: "wrap",
+            columnGap: "0.28em",
+            maxWidth: "min(1100px, calc(100vw - 72px))",
+            minWidth: "2ch",
+            minHeight: "1.1em",
+            fontSize: "clamp(2.25rem, 5.2vw, 4.5rem)",
             fontWeight: 700,
             lineHeight: 1.1,
             userSelect: "none",
           }}
         >
-          {"Hello.".split("").map((ch, i) => (
-            <span key={i} data-char style={{ display: "inline-block", willChange: "transform" }}>
-              {ch}
-            </span>
+          {shown.split("\n").map((line, li) => (
+            <Fragment key={li}>
+              {li > 0 && <span style={{ flexBasis: "100%", height: 0 }} />}
+              {line
+                .split(/\s+/)
+                .filter(Boolean)
+                .map((word, wi) => (
+                  <span key={wi} style={{ display: "inline-flex", whiteSpace: "nowrap" }}>
+                    {Array.from(word).map((ch, ci) => (
+                      <span
+                        key={ci}
+                        data-char
+                        style={{
+                          display: "inline-block",
+                          willChange: "transform",
+                          visibility: editing ? "hidden" : "visible",
+                        }}
+                      >
+                        {ch}
+                      </span>
+                    ))}
+                  </span>
+                ))}
+            </Fragment>
           ))}
+
+          {editing && (
+            <>
+              <textarea
+                ref={taRef}
+                value={draft}
+                maxLength={GREETING_MAX_LENGTH}
+                rows={1}
+                spellCheck={false}
+                aria-label="Edit greeting text"
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    finishEdit(true);
+                  } else if (e.key === "Escape") {
+                    e.preventDefault();
+                    finishEdit(false);
+                  }
+                }}
+                onBlur={() => finishEdit(true)}
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  width: "100%",
+                  height: "100%",
+                  boxSizing: "border-box",
+                  margin: 0,
+                  padding: 0,
+                  border: "none",
+                  outline: "2px dashed var(--muted)",
+                  outlineOffset: 8,
+                  borderRadius: 4,
+                  background: "transparent",
+                  color: "inherit",
+                  caretColor: "var(--fg)",
+                  font: "inherit",
+                  letterSpacing: "inherit",
+                  resize: "none",
+                  overflow: "hidden",
+                  pointerEvents: "auto",
+                  userSelect: "text",
+                  WebkitUserSelect: "text",
+                  cursor: "text",
+                }}
+              />
+              <div
+                style={{
+                  position: "absolute",
+                  left: 0,
+                  top: "calc(100% + 22px)",
+                  fontSize: 12,
+                  fontWeight: 400,
+                  lineHeight: 1.4,
+                  whiteSpace: "nowrap",
+                  color: "var(--muted)",
+                  pointerEvents: "none",
+                }}
+              >
+                Enter to save · Shift+Enter for a new line · Esc to cancel
+              </div>
+            </>
+          )}
         </div>
       </div>
+
+      {/* Dashed box while dragging a selection */}
+      <div
+        ref={marqueeRef}
+        style={{
+          position: "fixed",
+          left: 0,
+          top: 0,
+          display: "none",
+          border: "1.5px dashed var(--fg)",
+          background: "rgba(72,219,251,0.12)",
+          pointerEvents: "none",
+          zIndex: 4,
+        }}
+      />
+
+      {/* Box around the selected drawing (drag inside it to move, Delete to remove) */}
+      {sel && tool === "select" && (
+        <div
+          ref={selBoxRef}
+          style={{
+            position: "fixed",
+            left: sel.x,
+            top: sel.y,
+            width: sel.w,
+            height: sel.h,
+            border: "1.5px dashed var(--fg)",
+            outline: "1px solid var(--bg)",
+            pointerEvents: "none",
+            zIndex: 4,
+          }}
+        />
+      )}
 
       {/* Portfolio view */}
       {portfolioTab && (
@@ -1145,6 +1621,7 @@ export default function Home() {
         onChange={(e) => {
           const v = e.target.value;
           setBrush((b) => ({ ...b, color: v, style: b.style === "eraser" ? "solid" : b.style }));
+          setTool("draw");
         }}
         style={{
           position: "fixed",
