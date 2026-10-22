@@ -16,7 +16,7 @@ export function links() {
 // ---- Greeting text (top-left) ----
 // Right-click the text on the page to edit it (edits last until the page is reloaded).
 // To change what everyone sees by default, change this line:
-const DEFAULT_GREETING = "Hello. My Name is Donghoon";
+const DEFAULT_GREETING = "Hello. My Name is Donghoon.";
 const GREETING_MAX_LENGTH = 120;
 
 // ---- Text physics (tweak the feel here) ----
@@ -34,11 +34,12 @@ const TAB_BAR_H = 38;
 // ---- Brush options ----
 const STYLES = [
   { id: "solid", label: "Solid" },
+  { id: "neon", label: "Neon" },
+  { id: "pencil", label: "Pencil" },
   { id: "dotted", label: "Dotted" },
   { id: "dashed", label: "Dashed" },
   { id: "double", label: "Double" },
-  { id: "spray", label: "Spray" },
-  { id: "neon", label: "Neon" },
+  { id: "line", label: "Line" },
   { id: "eraser", label: "Eraser" },
 ] as const;
 
@@ -86,8 +87,7 @@ type Particle = {
 function strokePad(b: Brush) {
   let r = b.size / 2;
   if (b.style === "eraser") r = b.size * 0.75;
-  if (b.style === "spray") r = b.size * 1.5;
-  if (b.style === "double") r = b.size * 0.8 + b.size / 6;
+  if (b.style === "double") r = b.size * 0.8 + Math.max(1, b.size / 3) / 2;
   if (b.style === "neon") r = b.size;
   return r + 1;
 }
@@ -121,6 +121,14 @@ function segHitsRect(a: Pt, b: Pt, r: Rect) {
 const PIE_R = 160; // outer radius of the whole menu (px)
 const RING1 = { r0: 36, r1: 92 };
 const RING2 = { r0: 98, r1: 152 };
+
+// ---- Pie menu on touch screens: one ring at a time, centre = back, slider below for thickness ----
+const PIE_R_TOUCH = 160;
+const TOUCH_RING = { r0: 44, r1: 114 };
+const TOUCH_CENTER_R = 34;
+const TOUCH_SLIDER_R = 132;
+const LONG_PRESS_MS = 450; // how long to hold a finger to open the menu
+const LONG_PRESS_SLOP = 10; // moving further than this (px) means it's a drawing stroke instead
 
 type Slice = {
   id: string;
@@ -216,7 +224,7 @@ function Ring(props: { slices: Slice[]; r0: number; r1: number }) {
   );
 }
 
-// Small seeded random so spray strokes look identical when redrawn (undo/redo, tab switch)
+// Small seeded random so pencil strokes look identical when redrawn (undo/redo, move, resize)
 function mulberry32(seed: number) {
   let a = seed | 0;
   return function () {
@@ -227,166 +235,244 @@ function mulberry32(seed: number) {
   };
 }
 
-// Draws strokes onto a canvas context. Used for live drawing and for replaying history.
-function createPainter(ctx: CanvasRenderingContext2D, getInk: () => string) {
-  let b: Brush = { color: "#ffffff", style: "solid", size: 8 };
-  let last: Pt = { x: 0, y: 0 };
-  let carry = 0; // distance since last dot (dotted)
-  let pathDist = 0; // distance along the stroke (dashed)
-  let rnd: () => number = Math.random;
+// ---------- Painting one whole stroke ----------
+// Every stroke is drawn from its full list of points, the same way live and on replay
+// (undo / redo / move / resize). That keeps joints clean: no per-segment artifacts.
 
-  const col = () => (b.color === "ink" ? getInk() : b.color);
+const NEON_GLOW = 2.5; // glow size = brush size x this
 
-  const prep = () => {
-    ctx.globalCompositeOperation = b.style === "eraser" ? "destination-out" : "source-over";
-    ctx.strokeStyle = col();
-    ctx.fillStyle = col();
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.shadowBlur = 0;
-  };
+// Calls fn at evenly spaced distances along the polyline (first call at the very start)
+function walkPath(pts: Pt[], spacing: number, fn: (x: number, y: number) => void) {
+  fn(pts[0].x, pts[0].y);
+  let next = spacing;
+  let acc = 0;
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1];
+    const b = pts[i];
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    if (len === 0) continue;
+    while (next <= acc + len) {
+      const t = (next - acc) / len;
+      fn(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t);
+      next += spacing;
+    }
+    acc += len;
+  }
+}
 
-  const dot = (x: number, y: number, r: number) => {
+// Round-capped line through the points (a dot if there is only one point)
+function strokeRound(ctx: CanvasRenderingContext2D, pts: Pt[], width: number) {
+  if (pts.length === 1) {
     ctx.beginPath();
-    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.arc(pts[0].x, pts[0].y, width / 2, 0, Math.PI * 2);
     ctx.fill();
-  };
+    return;
+  }
+  ctx.lineWidth = width;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, pts[0].y);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+  ctx.stroke();
+}
 
-  const spray = (x: number, y: number, size: number) => {
-    const n = 6 + size;
-    for (let i = 0; i < n; i++) {
-      const a = rnd() * Math.PI * 2;
-      const r = Math.sqrt(rnd()) * size * 1.5;
-      ctx.fillRect(x + Math.cos(a) * r, y + Math.sin(a) * r, 1.3, 1.3);
+// Dashes with flat (butt) ends, including the very first and last dash
+function strokeDashes(ctx: CanvasRenderingContext2D, pts: Pt[], width: number, on: number, period: number) {
+  ctx.lineWidth = width;
+  ctx.lineCap = "butt";
+  ctx.lineJoin = "miter";
+  ctx.miterLimit = 2;
+  ctx.beginPath();
+  let pos = 0;
+  let lastK = -1;
+  let lastEnd = -1;
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1];
+    const b = pts[i];
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    if (len === 0) continue;
+    const segStart = pos;
+    const segEnd = pos + len;
+    for (let k = Math.floor(segStart / period); ; k++) {
+      const d0 = k * period;
+      if (d0 >= segEnd) break;
+      const s = Math.max(d0, segStart);
+      const e = Math.min(d0 + on, segEnd);
+      if (e <= s) continue;
+      const ta = (s - segStart) / len;
+      const tb = (e - segStart) / len;
+      const x1 = a.x + (b.x - a.x) * tb;
+      const y1 = a.y + (b.y - a.y) * tb;
+      if (lastK === k && Math.abs(lastEnd - s) < 1e-6) {
+        ctx.lineTo(x1, y1); // the dash keeps going around a corner
+      } else {
+        ctx.moveTo(a.x + (b.x - a.x) * ta, a.y + (b.y - a.y) * ta);
+        ctx.lineTo(x1, y1);
+      }
+      lastK = k;
+      lastEnd = e;
     }
-  };
+    pos = segEnd;
+  }
+  ctx.stroke();
+}
 
-  const stamp = (x: number, y: number) => {
-    prep();
-    if (b.style === "spray") {
-      spray(x, y, b.size);
-      return;
-    }
-    if (b.style === "neon") {
-      ctx.shadowColor = col();
-      ctx.shadowBlur = b.size * 2;
-      dot(x, y, b.size / 2);
-      ctx.shadowBlur = 0;
-      return;
-    }
-    const r = (b.style === "eraser" ? b.size * 1.5 : b.size) / 2;
-    dot(x, y, r);
-  };
+// Two parallel copies of the path, `off` px either side of it
+function offsetPaths(pts: Pt[], off: number) {
+  const p: Pt[] = [pts[0]];
+  for (let i = 1; i < pts.length; i++) {
+    const q = p[p.length - 1];
+    if (Math.hypot(pts[i].x - q.x, pts[i].y - q.y) > 0.01) p.push(pts[i]);
+  }
+  const left: Pt[] = [];
+  const right: Pt[] = [];
+  if (p.length < 2) return { left, right };
 
-  const begin = (brush: Brush, p: Pt, seed: number) => {
-    b = brush;
-    last = { x: p.x, y: p.y };
-    carry = 0;
-    pathDist = 0;
-    rnd = mulberry32(seed);
-    stamp(p.x, p.y);
-  };
-
-  // Returns true if a segment was drawn
-  const segment = (p: Pt): boolean => {
-    prep();
-    const x = p.x;
-    const y = p.y;
-    const dx = x - last.x;
-    const dy = y - last.y;
+  const n: Pt[] = []; // normal of each segment
+  for (let i = 1; i < p.length; i++) {
+    const dx = p[i].x - p[i - 1].x;
+    const dy = p[i].y - p[i - 1].y;
     const len = Math.hypot(dx, dy);
-    if (len < 0.5) return false;
-
-    switch (b.style) {
-      case "solid":
-      case "eraser": {
-        ctx.lineWidth = b.style === "eraser" ? b.size * 1.5 : b.size;
-        ctx.beginPath();
-        ctx.moveTo(last.x, last.y);
-        ctx.lineTo(x, y);
-        ctx.stroke();
-        break;
-      }
-
-      case "dotted": {
-        const spacing = Math.max(b.size * 2, 4);
-        let d = spacing - carry;
-        while (d <= len) {
-          dot(last.x + (dx / len) * d, last.y + (dy / len) * d, b.size / 2);
-          d += spacing;
-        }
-        carry = len - (d - spacing);
-        break;
-      }
-
-      case "dashed": {
-        const period = b.size * 3.5;
-        const on = b.size * 1.5;
-        ctx.lineCap = "butt";
-        ctx.lineWidth = b.size;
-        let d = 0;
-        while (d < len) {
-          const phase = (pathDist + d) % period;
-          const inDash = phase < on;
-          const step = Math.min((inDash ? on : period) - phase, len - d);
-          if (inDash) {
-            ctx.beginPath();
-            ctx.moveTo(last.x + (dx / len) * d, last.y + (dy / len) * d);
-            ctx.lineTo(last.x + (dx / len) * (d + step), last.y + (dy / len) * (d + step));
-            ctx.stroke();
-          }
-          d += Math.max(step, 0.01);
-        }
-        pathDist += len;
-        break;
-      }
-
-      case "double": {
-        const nx = -dy / len;
-        const ny = dx / len;
-        const off = b.size * 0.8;
-        ctx.lineWidth = Math.max(1, b.size / 3);
-        for (const s of [-1, 1]) {
-          ctx.beginPath();
-          ctx.moveTo(last.x + nx * off * s, last.y + ny * off * s);
-          ctx.lineTo(x + nx * off * s, y + ny * off * s);
-          ctx.stroke();
-        }
-        break;
-      }
-
-      case "spray": {
-        const steps = Math.ceil(len / 4);
-        for (let i = 1; i <= steps; i++) {
-          spray(last.x + (dx * i) / steps, last.y + (dy * i) / steps, b.size);
-        }
-        break;
-      }
-
-      case "neon": {
-        ctx.shadowColor = col();
-        ctx.shadowBlur = b.size * 2;
-        ctx.lineWidth = b.size;
-        ctx.beginPath();
-        ctx.moveTo(last.x, last.y);
-        ctx.lineTo(x, y);
-        ctx.stroke();
-        ctx.shadowBlur = 0;
-        ctx.strokeStyle = "rgba(255,255,255,0.85)";
-        ctx.lineWidth = Math.max(1, b.size * 0.3);
-        ctx.beginPath();
-        ctx.moveTo(last.x, last.y);
-        ctx.lineTo(x, y);
-        ctx.stroke();
-        break;
+    n.push({ x: -dy / len, y: dx / len });
+  }
+  for (let i = 0; i < p.length; i++) {
+    let nx: number;
+    let ny: number;
+    let k = 1;
+    if (i === 0) {
+      nx = n[0].x;
+      ny = n[0].y;
+    } else if (i === p.length - 1) {
+      nx = n[n.length - 1].x;
+      ny = n[n.length - 1].y;
+    } else {
+      const ax = n[i - 1].x + n[i].x;
+      const ay = n[i - 1].y + n[i].y;
+      const al = Math.hypot(ax, ay);
+      if (al < 1e-6) {
+        nx = n[i].x;
+        ny = n[i].y;
+      } else {
+        nx = ax / al;
+        ny = ay / al;
+        k = 1 / Math.max(0.5, nx * n[i].x + ny * n[i].y); // keeps the gap even around corners
       }
     }
+    left.push({ x: p[i].x + nx * off * k, y: p[i].y + ny * off * k });
+    right.push({ x: p[i].x - nx * off * k, y: p[i].y - ny * off * k });
+  }
+  return { left, right };
+}
 
-    last = { x, y };
-    return true;
-  };
+function strokeFlat(ctx: CanvasRenderingContext2D, pts: Pt[], width: number) {
+  ctx.lineWidth = width;
+  ctx.lineCap = "butt";
+  ctx.lineJoin = "miter";
+  ctx.miterLimit = 2;
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, pts[0].y);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+  ctx.stroke();
+}
 
-  return { begin, segment };
+function paintStroke(ctx: CanvasRenderingContext2D, b: Brush, pts: Pt[], seed: number, ink: string) {
+  if (pts.length === 0) return;
+  const color = b.color === "ink" ? ink : b.color;
+  const dpr = window.devicePixelRatio || 1;
+
+  ctx.save();
+  ctx.globalCompositeOperation = b.style === "eraser" ? "destination-out" : "source-over";
+  ctx.strokeStyle = color;
+  ctx.fillStyle = color;
+  ctx.shadowBlur = 0;
+
+  switch (b.style) {
+    case "solid":
+      strokeRound(ctx, pts, b.size);
+      break;
+
+    case "eraser":
+      strokeRound(ctx, pts, b.size * 1.5);
+      break;
+
+    case "line":
+      strokeRound(ctx, pts, b.size);
+      break;
+
+    case "neon": {
+      // One glow pass for the whole path, then a bright core on top: always solid
+      ctx.shadowColor = color;
+      ctx.shadowBlur = b.size * NEON_GLOW * dpr;
+      strokeRound(ctx, pts, b.size);
+      ctx.shadowBlur = 0;
+      ctx.shadowColor = "transparent";
+      ctx.strokeStyle = "rgba(255,255,255,0.9)";
+      ctx.fillStyle = "rgba(255,255,255,0.9)";
+      strokeRound(ctx, pts, Math.max(1, b.size * 0.35));
+      break;
+    }
+
+    case "pencil": {
+      // Dense, fine grain packed into a thin line
+      const r = Math.max(b.size / 2, 0.6);
+      const dots = Math.ceil(r * 2) + 3;
+      const rnd = mulberry32(seed);
+      const reps = pts.length === 1 ? 5 : 1;
+      walkPath(pts, 1, (x, y) => {
+        for (let rep = 0; rep < reps; rep++) {
+          for (let i = 0; i < dots; i++) {
+            const a = rnd() * Math.PI * 2;
+            const d = Math.sqrt(rnd()) * r;
+            ctx.fillRect(x + Math.cos(a) * d - 0.5, y + Math.sin(a) * d - 0.5, 1, 1);
+          }
+        }
+      });
+      break;
+    }
+
+    case "dotted": {
+      const r = b.size / 2;
+      ctx.beginPath();
+      walkPath(pts, Math.max(b.size * 2, 4), (x, y) => {
+        ctx.moveTo(x + r, y);
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+      });
+      ctx.fill();
+      break;
+    }
+
+    case "dashed":
+      if (pts.length >= 2) strokeDashes(ctx, pts, b.size, b.size * 1.5, b.size * 3.5);
+      break;
+
+    case "double": {
+      // Two parallel lines with flat ends: no round brush tip anywhere
+      if (pts.length >= 2) {
+        const { left, right } = offsetPaths(pts, b.size * 0.8);
+        const w = Math.max(1, b.size / 3);
+        if (left.length >= 2) {
+          strokeFlat(ctx, left, w);
+          strokeFlat(ctx, right, w);
+        }
+      }
+      break;
+    }
+  }
+  ctx.restore();
+}
+
+// Straight-line brush: snaps the angle (from horizontal) to the nearest 5 degrees
+const SNAP_DEG = 5;
+function snapLine(o: Pt, p: Pt) {
+  const dx = p.x - o.x;
+  const dy = p.y - o.y;
+  const len = Math.hypot(dx, dy);
+  const step = (SNAP_DEG * Math.PI) / 180;
+  const a = Math.round(Math.atan2(dy, dx) / step) * step;
+  const ux = Math.cos(a);
+  const uy = Math.sin(a);
+  return { pt: { x: o.x + ux * len, y: o.y + uy * len }, len, ux, uy };
 }
 
 export default function Home() {
@@ -394,10 +480,12 @@ export default function Home() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const ringRef = useRef<HTMLDivElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const openGestureRef = useRef(false); // true while the finger that opened the menu is still down (its release must not click the menu)
   const tabBarRef = useRef<HTMLDivElement>(null);
   const colorInputRef = useRef<HTMLInputElement>(null);
   const marqueeRef = useRef<HTMLDivElement>(null);
   const selBoxRef = useRef<HTMLDivElement>(null);
+  const gizmoRef = useRef<SVGSVGElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
 
   const actionsRef = useRef({
@@ -417,7 +505,7 @@ export default function Home() {
   const selRef = useRef<Selection | null>(null); // written by the drawing handlers
   const strokeIdRef = useRef(0);
 
-  // ---- Greeting text (right-click it to edit) ----
+  // ---- Greeting text (right-click it, or long-press on a phone, to edit) ----
   const [greeting, setGreeting] = useState(DEFAULT_GREETING);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
@@ -474,8 +562,9 @@ export default function Home() {
   onCanvasRef.current = onCanvas;
 
   const [brush, setBrush] = useState<Brush>({ color: "#48dbfb", style: "solid", size: 8 });
-  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; touch: boolean } | null>(null);
   const [sub, setSub] = useState<"brush" | "color" | null>(null);
+  const [touchUI, setTouchUI] = useState(false); // true once the last tap came from a finger
   const [hist, setHist] = useState({ undo: false, redo: false });
 
   const brushRef = useRef(brush);
@@ -620,13 +709,17 @@ export default function Home() {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const painter = createPainter(ctx, () => inkFor(themeRef.current));
+    const ink = () => inkFor(themeRef.current);
 
     let current: StrokeOp | null = null;
     let drawing = false;
     let marquee: Rect | null = null;
     let moving: { x0: number; y0: number; dx: number; dy: number } | null = null;
     let liveRaf = 0;
+    let snap: HTMLCanvasElement | null = null; // the canvas as it was before the current stroke
+    let lpTimer = 0; // long-press timer (touch)
+    let lpStart: Pt | null = null;
+    let lastPtype = "mouse";
 
     const setSelection = (s: Selection | null) => {
       selRef.current = s;
@@ -692,15 +785,55 @@ export default function Home() {
 
     const redraw = (live?: { ids: Set<number>; dx: number; dy: number }) => {
       wipe();
+      const col = ink();
       for (const { s, ox, oy } of resolve()) {
         const moved = !!live && live.ids.has(s.id);
         const X = ox + (moved && live ? live.dx : 0);
         const Y = oy + (moved && live ? live.dy : 0);
-        painter.begin(s.brush, { x: s.pts[0].x + X, y: s.pts[0].y + Y }, s.seed);
-        for (let j = 1; j < s.pts.length; j++) {
-          painter.segment({ x: s.pts[j].x + X, y: s.pts[j].y + Y });
+        if (X !== 0 || Y !== 0) {
+          ctx.save();
+          ctx.translate(X, Y);
+          paintStroke(ctx, s.brush, s.pts, s.seed, col);
+          ctx.restore();
+        } else {
+          paintStroke(ctx, s.brush, s.pts, s.seed, col);
         }
       }
+    };
+
+    // Live drawing: put back the picture from before the stroke, then paint the whole stroke
+    const takeSnapshot = () => {
+      if (!snap) snap = document.createElement("canvas");
+      if (snap.width !== canvas.width || snap.height !== canvas.height) {
+        snap.width = canvas.width;
+        snap.height = canvas.height;
+      }
+      const sctx = snap.getContext("2d");
+      if (!sctx) return;
+      sctx.setTransform(1, 0, 0, 1, 0, 0);
+      sctx.clearRect(0, 0, snap.width, snap.height);
+      sctx.drawImage(canvas, 0, 0);
+    };
+
+    const paintLive = () => {
+      if (!current || !snap) return;
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(snap, 0, 0);
+      ctx.restore();
+      paintStroke(ctx, current.brush, current.pts, current.seed, ink());
+    };
+
+    // Strokes that would draw nothing (e.g. a click with the line brush) aren't kept
+    const strokeIsEmpty = (st: StrokeOp) => {
+      const n = st.pts.length;
+      const s = st.brush.style;
+      if (s === "line") {
+        return n < 2 || Math.hypot(st.pts[1].x - st.pts[0].x, st.pts[1].y - st.pts[0].y) < 1;
+      }
+      if (s === "dashed" || s === "double") return n < 2;
+      return false;
     };
 
     const commit = (op: Op) => {
@@ -711,6 +844,62 @@ export default function Home() {
       sync();
     };
 
+    // ----- Angle gizmo for the straight-line brush -----
+    const GZ_LEN = 96;
+    const GZ_R = 28;
+    const gz = (name: string) =>
+      gizmoRef.current ? gizmoRef.current.querySelector('[data-gz="' + name + '"]') : null;
+
+    const hideGizmo = () => {
+      if (gizmoRef.current) gizmoRef.current.style.display = "none";
+    };
+
+    const showGizmo = (o: Pt, s: { len: number; ux: number; uy: number }) => {
+      const g = gizmoRef.current;
+      if (!g) return;
+      g.style.display = "block";
+      const bx = s.ux >= 0 ? 1 : -1; // which way the horizontal reference points
+      const phi = Math.round((Math.acos(Math.min(1, Math.abs(s.ux))) * 180) / Math.PI);
+      const r = Math.min(GZ_R, Math.max(10, s.len * 0.45));
+
+      const base = gz("base");
+      const grad = gz("grad");
+      const dot = gz("dot");
+      const arc = gz("arc");
+      const label = gz("label");
+      if (!base || !grad || !dot || !arc || !label) return;
+
+      const x2 = o.x + bx * GZ_LEN;
+      base.setAttribute("x1", String(o.x));
+      base.setAttribute("y1", String(o.y));
+      base.setAttribute("x2", String(x2));
+      base.setAttribute("y2", String(o.y));
+      grad.setAttribute("x1", String(o.x));
+      grad.setAttribute("y1", String(o.y));
+      grad.setAttribute("x2", String(x2));
+      grad.setAttribute("y2", String(o.y));
+      dot.setAttribute("cx", String(o.x));
+      dot.setAttribute("cy", String(o.y));
+
+      if (phi === 0) {
+        arc.setAttribute("d", "");
+      } else {
+        const sweep = bx * s.uy > 0 ? 1 : 0;
+        arc.setAttribute(
+          "d",
+          "M" + (o.x + bx * r) + " " + o.y + " A" + r + " " + r + " 0 0 " + sweep + " " + (o.x + s.ux * r) + " " + (o.y + s.uy * r)
+        );
+      }
+
+      // Put the number on the far side of the reference line from the drawn line, so the
+      // two never overlap
+      const side = s.uy > 0 ? -1 : 1;
+      label.setAttribute("x", String(o.x + bx * (r + 22)));
+      label.setAttribute("y", String(o.y + side * 13));
+      label.textContent = phi + "°";
+    };
+
+    // ----- Selection helpers -----
     // Strokes that touch the rectangle. Erasers ride along (so erased gaps move with the
     // drawing) but never count as a selection on their own.
     const pickIn = (r: Rect) => {
@@ -739,8 +928,8 @@ export default function Home() {
     const boundsFor = (ids: number[]) => {
       const want = new Set(ids);
       const items = resolve().filter(({ s }) => want.has(s.id));
-      const ink = items.filter(({ s }) => s.brush.style !== "eraser");
-      const use = ink.length ? ink : items;
+      const inkItems = items.filter(({ s }) => s.brush.style !== "eraser");
+      const use = inkItems.length ? inkItems : items;
       let x0 = Infinity;
       let y0 = Infinity;
       let x1 = -Infinity;
@@ -837,11 +1026,73 @@ export default function Home() {
       },
     };
 
+    // ----- Opening the pie menu / the text editor -----
+    const textHit = (x: number, y: number) => {
+      const box = textRef.current ? textRef.current.getBoundingClientRect() : null;
+      const slack = 10;
+      return (
+        !!box &&
+        x >= box.left - slack &&
+        x <= box.right + slack &&
+        y >= box.top - slack &&
+        y <= box.bottom + slack
+      );
+    };
+
+    const openAt = (x: number, y: number, touch: boolean) => {
+      if (textHit(x, y)) {
+        startEditRef.current(); // right-click / long-press on the greeting edits it
+        return;
+      }
+      const R = touch ? PIE_R_TOUCH : PIE_R;
+      const mx = Math.min(Math.max(x, R), Math.max(window.innerWidth - R, R));
+      const my = Math.min(Math.max(y, R), Math.max(window.innerHeight - R, R));
+      setSub(null);
+      setMenu({ x: mx, y: my, touch });
+    };
+
+    // Abandon whatever stroke / drag is in progress without keeping it
+    const discardInteraction = () => {
+      const had = drawing || !!current || !!moving || !!marquee;
+      drawing = false;
+      current = null;
+      moving = null;
+      marquee = null;
+      showMarquee();
+      hideGizmo();
+      const box = selBoxRef.current;
+      if (box) box.style.transform = "";
+      if (had) redraw();
+    };
+
+    const cancelLongPress = () => {
+      if (lpTimer) window.clearTimeout(lpTimer);
+      lpTimer = 0;
+    };
+
+    const fireLongPress = () => {
+      lpTimer = 0;
+      const p = lpStart;
+      lpStart = null;
+      if (!p) return;
+      discardInteraction(); // the tap that started the long press isn't a stroke
+      if (editingRef.current) return;
+      openGestureRef.current = true;
+      openAt(p.x, p.y, true);
+    };
+
+    // ----- Pointer handlers -----
     const onDown = (e: PointerEvent) => {
-      if (e.button !== 0 || e.ctrlKey || menuOpenRef.current || !onCanvasRef.current) return;
+      if (!e.isPrimary || e.button !== 0 || e.ctrlKey || menuOpenRef.current || !onCanvasRef.current) return;
       if (editingRef.current) return; // first click while editing text just finishes the edit
       const p = { x: e.clientX, y: e.clientY };
       canvas.setPointerCapture(e.pointerId);
+
+      if (e.pointerType === "touch") {
+        cancelLongPress();
+        lpStart = p;
+        lpTimer = window.setTimeout(fireLongPress, LONG_PRESS_MS);
+      }
 
       if (toolRef.current === "select") {
         const s = selRef.current;
@@ -858,20 +1109,31 @@ export default function Home() {
       drawing = true;
       const seed = Math.floor(Math.random() * 2147483647);
       const b = { ...brushRef.current };
-      painter.begin(b, p, seed);
       strokeIdRef.current += 1;
       current = { kind: "stroke", id: strokeIdRef.current, brush: b, seed, pts: [p] };
+      takeSnapshot();
+      paintLive();
     };
 
     const onMove = (e: PointerEvent) => {
+      if (!e.isPrimary) return;
       const p = { x: e.clientX, y: e.clientY };
       const isSelect = toolRef.current === "select";
+      if (lpTimer && lpStart && Math.hypot(p.x - lpStart.x, p.y - lpStart.y) > LONG_PRESS_SLOP) {
+        cancelLongPress(); // finger moved: it's a stroke, not a long press
+      }
+
       const ring = ringRef.current;
       if (ring) {
         ring.style.transform = "translate(" + p.x + "px, " + p.y + "px) translate(-50%, -50%)";
         const overBar = !!tabBarRef.current && tabBarRef.current.contains(e.target as Node);
         const hide =
-          menuOpenRef.current || overBar || !onCanvasRef.current || isSelect || editingRef.current;
+          menuOpenRef.current ||
+          overBar ||
+          !onCanvasRef.current ||
+          isSelect ||
+          editingRef.current ||
+          e.pointerType === "touch";
         ring.style.opacity = hide ? "0" : "1";
       }
 
@@ -895,14 +1157,31 @@ export default function Home() {
       }
 
       if (!drawing || !current) return;
-      if (painter.segment(p)) current.pts.push(p);
+      if (current.brush.style === "line") {
+        const o = current.pts[0];
+        const s = snapLine(o, p);
+        current.pts = [o, s.pt];
+        showGizmo(o, s);
+        paintLive();
+        return;
+      }
+      const last = current.pts[current.pts.length - 1];
+      if (Math.hypot(p.x - last.x, p.y - last.y) >= 0.5) {
+        current.pts.push(p);
+        paintLive();
+      }
     };
 
     const onUp = () => {
+      cancelLongPress();
+      lpStart = null;
       drawing = false;
+      hideGizmo();
       if (current) {
-        commit(current);
+        const st = current;
         current = null;
+        if (strokeIsEmpty(st)) redraw();
+        else commit(st);
       }
 
       if (moving) {
@@ -969,29 +1248,33 @@ export default function Home() {
       }
       if (!onCanvasRef.current) return; // normal browser menu on portfolio tabs
       e.preventDefault();
-      onUp(); // finish any stroke / selection drag in progress
 
-      // Right-click on the greeting text edits it
-      const box = textRef.current ? textRef.current.getBoundingClientRect() : null;
-      const slack = 10;
-      if (
-        box &&
-        e.clientX >= box.left - slack &&
-        e.clientX <= box.right + slack &&
-        e.clientY >= box.top - slack &&
-        e.clientY <= box.bottom + slack
-      ) {
-        startEditRef.current();
+      if (lastPtype === "touch") {
+        // Some phones also send a context-menu event after a long press. Our own
+        // long-press timer normally got there first, so only act if it hasn't.
+        if (!menuOpenRef.current && !editingRef.current) {
+          cancelLongPress();
+          discardInteraction();
+          openAt(e.clientX, e.clientY, true);
+        }
         return;
       }
 
-      const mx = Math.min(Math.max(e.clientX, PIE_R), Math.max(window.innerWidth - PIE_R, PIE_R));
-      const my = Math.min(Math.max(e.clientY, PIE_R), Math.max(window.innerHeight - PIE_R, PIE_R));
-      setSub(null);
-      setMenu({ x: mx, y: my });
+      onUp(); // finish any stroke / selection drag in progress
+      openAt(e.clientX, e.clientY, false);
+    };
+
+    const onGlobalUp = () => {
+      if (!openGestureRef.current) return;
+      // the browser fires a click right after the release; let it pass before the menu is live
+      window.setTimeout(() => {
+        openGestureRef.current = false;
+      }, 150);
     };
 
     const onGlobalDown = (e: PointerEvent) => {
+      lastPtype = e.pointerType;
+      setTouchUI(e.pointerType === "touch");
       const m = menuRef.current;
       if (m && !m.contains(e.target as Node)) setMenu(null);
     };
@@ -1048,10 +1331,13 @@ export default function Home() {
     window.addEventListener("wheel", onWheel, { passive: false });
     window.addEventListener("contextmenu", onContext);
     window.addEventListener("pointerdown", onGlobalDown);
+    window.addEventListener("pointerup", onGlobalUp);
+    window.addEventListener("pointercancel", onGlobalUp);
     window.addEventListener("keydown", onKey);
 
     return () => {
       cancelAnimationFrame(liveRaf);
+      cancelLongPress();
       window.removeEventListener("resize", resize);
       canvas.removeEventListener("pointerdown", onDown);
       canvas.removeEventListener("pointerup", onUp);
@@ -1060,6 +1346,8 @@ export default function Home() {
       window.removeEventListener("wheel", onWheel);
       window.removeEventListener("contextmenu", onContext);
       window.removeEventListener("pointerdown", onGlobalDown);
+      window.removeEventListener("pointerup", onGlobalUp);
+      window.removeEventListener("pointercancel", onGlobalUp);
       window.removeEventListener("keydown", onKey);
     };
   }, []);
@@ -1215,6 +1503,38 @@ export default function Home() {
   const previewR = Math.min(Math.max(brush.size / 2, 2), 20);
   const portfolioTab = PORTFOLIO.find((p) => "p:" + p.id === activeTab);
 
+  // Pie menu helpers
+  const pieR = menu && menu.touch ? PIE_R_TOUCH : PIE_R;
+  const centerPreview =
+    brush.style === "eraser" ? (
+      <circle
+        className="pie-text"
+        r={previewR}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={1.5}
+        strokeDasharray="3 3"
+        style={{ pointerEvents: "none", stroke: "var(--fg)", fill: "none" }}
+      />
+    ) : (
+      <circle r={previewR} style={{ pointerEvents: "none", fill: cssColor(brush.color) }} />
+    );
+
+  // Thickness slider (touch): thin on the left end of the half circle, thick on the right end
+  const sliderAng = Math.PI * (1 - (brush.size - 1) / 79);
+  const thumbX = TOUCH_SLIDER_R * Math.cos(sliderAng);
+  const thumbY = TOUCH_SLIDER_R * Math.sin(sliderAng);
+  const setSizeFromPointer = (e: { clientX: number; clientY: number }) => {
+    if (!menu) return;
+    const dx = e.clientX - menu.x;
+    const dy = e.clientY - menu.y;
+    let a = Math.atan2(dy, dx); // the lower half of the circle is 0 .. PI
+    if (a < 0) a = dx < 0 ? Math.PI : 0; // finger above the middle: snap to the nearer end
+    const t = 1 - a / Math.PI;
+    const size = Math.min(80, Math.max(1, Math.round(1 + t * 79)));
+    setBrush((b) => ({ ...b, size }));
+  };
+
   const canvasTabEl = (c: CanvasTab) => {
     const permanent = c.id === "c1";
     return (
@@ -1324,6 +1644,9 @@ export default function Home() {
           inset: 0,
           zIndex: 0,
           visibility: onCanvas ? "visible" : "hidden",
+          WebkitTouchCallout: "none",
+          userSelect: "none",
+          WebkitUserSelect: "none",
         }}
       />
 
@@ -1478,7 +1801,31 @@ export default function Home() {
             pointerEvents: "none",
             zIndex: 4,
           }}
-        />
+        >
+          {/* On a touch screen there is no Delete key, so show a Delete button on the box */}
+          {touchUI && (
+            <button
+              className="clickable"
+              onClick={() => actionsRef.current.deleteSelection()}
+              style={{
+                position: "absolute",
+                right: 0,
+                ...(sel.y < 80 ? { top: "100%", marginTop: 10 } : { bottom: "100%", marginBottom: 10 }),
+                pointerEvents: "auto",
+                padding: "7px 14px",
+                borderRadius: 999,
+                border: "1px solid var(--border)",
+                background: "var(--bar)",
+                color: "#ff5a5f",
+                font: "inherit",
+                fontSize: 13,
+                fontWeight: 600,
+              }}
+            >
+              Delete
+            </button>
+          )}
+        </div>
       )}
 
       {/* Portfolio view */}
@@ -1634,51 +1981,183 @@ export default function Home() {
         }}
       />
 
-      {/* Pie menu */}
+      {/* Angle gizmo for the straight-line brush (only visible while dragging a line) */}
+      <svg
+        ref={gizmoRef}
+        aria-hidden="true"
+        style={{
+          position: "fixed",
+          left: 0,
+          top: 0,
+          width: "100%",
+          height: "100%",
+          pointerEvents: "none",
+          zIndex: 4,
+          display: "none",
+          overflow: "visible",
+          color: "var(--fg)",
+        }}
+      >
+        <defs>
+          <linearGradient id="gz-fade" data-gz="grad" gradientUnits="userSpaceOnUse" x1="0" y1="0" x2="1" y2="0">
+            <stop offset="0" stopColor="currentColor" stopOpacity="0.9" />
+            <stop offset="1" stopColor="currentColor" stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        <line data-gz="base" stroke="url(#gz-fade)" strokeWidth="1.25" />
+        <path data-gz="arc" fill="none" stroke="currentColor" strokeWidth="1.25" />
+        <circle data-gz="dot" r="2.5" fill="currentColor" />
+        <text
+          data-gz="label"
+          textAnchor="middle"
+          dominantBaseline="central"
+          fontSize="12"
+          fill="currentColor"
+          style={{ paintOrder: "stroke", stroke: "var(--bg)", strokeWidth: 3, strokeLinejoin: "round", userSelect: "none" }}
+        />
+      </svg>
+
+      {/* Pie menu. Desktop: two rings (the brush / color ring wraps around the main ring).
+          Touch: one ring at a time, the centre is a back button, and a thin half-circle
+          slider underneath sets the brush thickness. */}
       {menu && (
         <div
           ref={menuRef}
+          onClickCapture={(e) => {
+            if (openGestureRef.current) e.stopPropagation();
+          }}
           style={{
             position: "fixed",
-            left: menu.x - PIE_R,
-            top: menu.y - PIE_R,
-            width: PIE_R * 2,
-            height: PIE_R * 2,
+            left: menu.x - pieR,
+            top: menu.y - pieR,
+            width: pieR * 2,
+            height: pieR * 2,
             zIndex: 10,
             pointerEvents: "none",
             animation: "pieIn 0.14s ease-out",
           }}
         >
           <svg
-            width={PIE_R * 2}
-            height={PIE_R * 2}
-            viewBox={-PIE_R + " " + -PIE_R + " " + PIE_R * 2 + " " + PIE_R * 2}
+            width={pieR * 2}
+            height={pieR * 2}
+            viewBox={-pieR + " " + -pieR + " " + pieR * 2 + " " + pieR * 2}
             style={{ display: "block", overflow: "visible", pointerEvents: "none" }}
           >
-            {sub === "brush" && <Ring slices={brushSlices} r0={RING2.r0} r1={RING2.r1} />}
-            {sub === "color" && <Ring slices={colorSlices} r0={RING2.r0} r1={RING2.r1} />}
-            <Ring slices={mainSlices} r0={RING1.r0} r1={RING1.r1} />
+            {menu.touch ? (
+              <>
+                {sub === null && <Ring slices={mainSlices} r0={TOUCH_RING.r0} r1={TOUCH_RING.r1} />}
+                {sub === "brush" && <Ring slices={brushSlices} r0={TOUCH_RING.r0} r1={TOUCH_RING.r1} />}
+                {sub === "color" && <Ring slices={colorSlices} r0={TOUCH_RING.r0} r1={TOUCH_RING.r1} />}
 
-            {/* Center: shows current brush, click to close */}
-            <g className="clickable" onClick={close} style={{ pointerEvents: "auto" }}>
-              <circle className="pie-center" r={30} />
-              {brush.style === "eraser" ? (
-                <circle
-                  className="pie-text"
-                  r={previewR}
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth={1.5}
-                  strokeDasharray="3 3"
-                  style={{ pointerEvents: "none", stroke: "var(--fg)", fill: "none" }}
-                />
-              ) : (
-                <circle
-                  r={previewR}
-                  style={{ pointerEvents: "none", fill: cssColor(brush.color) }}
-                />
-              )}
-            </g>
+                {/* Center: back to the previous ring (or close, on the first ring) */}
+                <g
+                  className="clickable"
+                  onClick={() => (sub ? setSub(null) : close())}
+                  style={{ pointerEvents: "auto" }}
+                >
+                  <circle className="pie-center" r={TOUCH_CENTER_R} />
+                  {sub ? (
+                    <>
+                      <text
+                        y={-5}
+                        textAnchor="middle"
+                        dominantBaseline="central"
+                        fontSize={20}
+                        className="pie-text"
+                        style={{ pointerEvents: "none", userSelect: "none" }}
+                      >
+                        ←
+                      </text>
+                      <text
+                        y={13}
+                        textAnchor="middle"
+                        dominantBaseline="central"
+                        fontSize={10}
+                        className="pie-text"
+                        style={{ pointerEvents: "none", userSelect: "none" }}
+                      >
+                        Back
+                      </text>
+                    </>
+                  ) : (
+                    centerPreview
+                  )}
+                </g>
+
+                {/* Thickness slider: thin half circle under the menu, thin on the left, thick on the right */}
+                <g>
+                  <path
+                    d={"M " + -TOUCH_SLIDER_R + " 0 A " + TOUCH_SLIDER_R + " " + TOUCH_SLIDER_R + " 0 0 0 " + TOUCH_SLIDER_R + " 0"}
+                    fill="none"
+                    stroke="var(--border)"
+                    strokeWidth={3}
+                    strokeLinecap="round"
+                    style={{ pointerEvents: "none" }}
+                  />
+                  {brush.size > 1 && (
+                    <path
+                      d={"M " + -TOUCH_SLIDER_R + " 0 A " + TOUCH_SLIDER_R + " " + TOUCH_SLIDER_R + " 0 0 0 " + thumbX + " " + thumbY}
+                      fill="none"
+                      stroke="var(--fg)"
+                      strokeWidth={3}
+                      strokeLinecap="round"
+                      style={{ pointerEvents: "none" }}
+                    />
+                  )}
+                  <circle
+                    cx={thumbX}
+                    cy={thumbY}
+                    r={9}
+                    fill="var(--fg)"
+                    stroke="var(--bg)"
+                    strokeWidth={2}
+                    style={{ pointerEvents: "none" }}
+                  />
+                  <text
+                    y={TOUCH_SLIDER_R + 22}
+                    textAnchor="middle"
+                    fontSize={12}
+                    className="pie-text"
+                    style={{ pointerEvents: "none", userSelect: "none" }}
+                  >
+                    {brush.size} px
+                  </text>
+                  {/* Wide invisible target so a thumb can grab the slider easily */}
+                  <path
+                    d={"M " + -TOUCH_SLIDER_R + " 0 A " + TOUCH_SLIDER_R + " " + TOUCH_SLIDER_R + " 0 0 0 " + TOUCH_SLIDER_R + " 0"}
+                    fill="none"
+                    stroke="transparent"
+                    strokeWidth={38}
+                    strokeLinecap="round"
+                    role="slider"
+                    aria-label="Brush thickness"
+                    aria-valuemin={1}
+                    aria-valuemax={80}
+                    aria-valuenow={brush.size}
+                    style={{ pointerEvents: "stroke" }}
+                    onPointerDown={(e) => {
+                      e.currentTarget.setPointerCapture(e.pointerId);
+                      setSizeFromPointer(e);
+                    }}
+                    onPointerMove={(e) => {
+                      if (e.buttons) setSizeFromPointer(e);
+                    }}
+                  />
+                </g>
+              </>
+            ) : (
+              <>
+                {sub === "brush" && <Ring slices={brushSlices} r0={RING2.r0} r1={RING2.r1} />}
+                {sub === "color" && <Ring slices={colorSlices} r0={RING2.r0} r1={RING2.r1} />}
+                <Ring slices={mainSlices} r0={RING1.r0} r1={RING1.r1} />
+
+                {/* Center: shows current brush, click to close */}
+                <g className="clickable" onClick={close} style={{ pointerEvents: "auto" }}>
+                  <circle className="pie-center" r={30} />
+                  {centerPreview}
+                </g>
+              </>
+            )}
           </svg>
         </div>
       )}
