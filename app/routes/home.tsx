@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import Bento from "../Bento";
+import Maps from "../Maps";
 import { PORTFOLIO } from "../portfolio";
 
 export function meta() {
@@ -1844,7 +1845,11 @@ export default function Home() {
             touchAction: "pan-y",
           }}
         >
-          <Bento key={portfolioTab.id} tab={portfolioTab} />
+          {portfolioTab.kind === "maps" ? (
+            <Maps key={portfolioTab.id} tab={portfolioTab} topInset={TAB_BAR_H} />
+          ) : (
+            <Bento key={portfolioTab.id} tab={portfolioTab} />
+          )}
         </div>
       )}
 

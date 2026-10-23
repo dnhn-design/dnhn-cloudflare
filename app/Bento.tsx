@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
-import type { PortfolioTab } from "./portfolio";
+import type { BentoTab } from "./portfolio";
 
 // Renders one portfolio tab as a bento grid. Content lives in portfolio.ts.
-export default function Bento({ tab }: { tab: PortfolioTab }) {
+export default function Bento({ tab }: { tab: BentoTab }) {
   const [openIdx, setOpenIdx] = useState<number | null>(null);
 
   // Close the PDF dialog when clicking elsewhere or pressing Esc

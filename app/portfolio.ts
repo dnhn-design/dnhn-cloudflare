@@ -7,6 +7,7 @@
 //  - Add a tab:     copy a whole { id, title, items } block.
 //  - Rename a tab:  change `title`.
 //  - Remove a tab:  delete its block.
+//  - Zoomable PDF maps: see the "MAPS TAB" block at the bottom of this file.
 //
 //  Each tab has `items`: the tiles of the bento grid. The grid is 4 columns
 //  wide (2 on phones). Tiles flow left-to-right and fill gaps automatically.
@@ -56,16 +57,42 @@ export type BentoItem = {
   body?: string;
 };
 
-export type PortfolioTab = {
+// One tile of a MAPS tab: a PDF (or image) the visitor can zoom and pan.
+export type MapItem = {
+  src?: string; // "/maps/seoul.pdf" (PDF, vector, sharpest) or "/maps/seoul.png" / ".svg" / ".webp"
+  title?: string; // small label in the corner of the tile
+  alt?: string; // description for screen readers
+  page?: number; // which PDF page to show (default 1)
+  aspect?: string; // tile shape, e.g. "4 / 3" or "2 / 1". Overrides the tab's `aspect`
+  bg?: string; // background behind the map, e.g. "#ffffff" (default) or "#101418"
+  maxZoom?: number; // how far visitors can zoom in (default 12)
+};
+
+// A normal bento tab (images, text, PDF links)
+export type BentoTab = {
   id: string; // unique, no spaces
   title: string; // shown on the tab
+  kind?: "bento";
   items: BentoItem[];
 };
 
+// A maps tab (zoomable / pannable PDFs). Rendered by Maps.tsx
+export type MapsTab = {
+  id: string;
+  title: string;
+  kind: "maps";
+  disclaimer?: string; // line of small print shown at the very top of the tab
+  rows?: number[]; // how many maps per row, repeating: [2, 1, 2, 2] = two, one wide, two, two, then again
+  aspect?: { [mapsInRow: number]: string }; // default tile shape by row type, e.g. { 1: "2 / 1", 2: "4 / 3" }
+  maps: MapItem[];
+};
+
+export type PortfolioTab = BentoTab | MapsTab;
+
 export const PORTFOLIO: PortfolioTab[] = [
   {
-    id: "branding",
-    title: "Branding",
+    id: "type",
+    title: "Type Design",
     items: [
       { w: 2, h: 2, label: "Hero project", pdf: "/pdfs/example.pdf", pdfLabel: "View case study" },
       {
@@ -83,8 +110,8 @@ export const PORTFOLIO: PortfolioTab[] = [
     ],
   },
   {
-    id: "web",
-    title: "Web",
+    id: "branding",
+    title: "Branding",
     items: [
       { w: 2, label: "Landing page", pdf: "/pdfs/example.pdf" },
       { label: "Mobile" },
@@ -96,8 +123,8 @@ export const PORTFOLIO: PortfolioTab[] = [
     ],
   },
   {
-    id: "print",
-    title: "Print",
+    id: "product",
+    title: "Product Design",
     items: [
       { h: 2, label: "Editorial" },
       { w: 2, h: 2, label: "Book cover", pdf: "/pdfs/example.pdf", pdfLabel: "Open full PDF" },
@@ -106,6 +133,37 @@ export const PORTFOLIO: PortfolioTab[] = [
       { type: "text", w: 2, title: "Notes", body: "Print work, from editorial layouts to posters. Add a line about materials, formats or collaborators." },
       { label: "Poster" },
       { label: "Card" },
+    ],
+  },
+
+  // ---------------------------------------------------------------------
+  //  MAPS TAB: zoomable / pannable transit diagrams.
+  //  Put PDFs (or PNG / SVG / WebP images) in public/maps/ and fill in `src`.
+  //  Maps without `src` show a grey placeholder so you can see the layout.
+  //
+  //  Layout: `rows` says how many maps go in each row, and the pattern repeats.
+  //  [2, 1, 2, 2] = row 1 has two maps, row 2 has one full-width map,
+  //  rows 3 and 4 have two each, then row 5 starts the pattern again.
+  //  Maps fill rows in the order they are listed below.
+  // ---------------------------------------------------------------------
+  {
+    id: "maps",
+    title: "Maps",
+    kind: "maps",
+    disclaimer:
+      "An unofficial and unaffiliated personal project to design custom transit diagrams. Any names or iconography used are for informational purposes only. All trademarks belong to their respective owners.",
+    rows: [2, 1, 2, 2],
+    aspect: { 1: "2 / 1.5", 2: "4 / 3" }, // tile shape for a full-width row and a two-up row
+    maps: [
+      { title: "NYC Subway", src: "/maps/subway-2026.pdf", bg:"000000"}, // replace with e.g. "/maps/my-map.pdf"
+      { title: "North Jersey", src: "/maps/2026_NJ.pdf", bg:"000000"},
+      { title: "NYC Area", src: "/maps/0719_NYC_rail.pdf", bg:"000000"}, // full width
+      { title: "Amtrak", src: "/maps/2026_Amtrak.pdf", bg:"000000"},
+      { title: "San Francisco", src: "/maps/2026_BART.pdf", bg:"000000"},
+      { title: "Chicago", src: "/maps/2026_Chicago.pdf", bg:"000000"},
+      { title: "Washington DC", src: "/maps/2026-DCmetro.pdf", bg:"000000"},
+      { title: "NYC Ferry", src: "/maps/NYC Ferry Network.pdf", bg:"000000"},
+      { title: "Seoul Line 1", src: "/maps/seoul1.pdf", bg:"000000"}
     ],
   },
 ];
