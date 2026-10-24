@@ -20,6 +20,11 @@ export function links() {
 const DEFAULT_GREETING = "Hello. My Name is Donghoon.";
 const GREETING_MAX_LENGTH = 120;
 
+// Small link in the top-right corner, next to the light / dark button.
+// Put your PDF in public/pdfs/ and set its path here. Use "" to hide the link.
+const RESUME_URL = "/pdfs/my_resume_2026.pdf";
+const RESUME_LABEL = "Resume";
+
 // ---- Text physics (tweak the feel here) ----
 const RADIUS = 140;
 const PUSH = 1.4;
@@ -483,6 +488,17 @@ export default function Home() {
   const menuRef = useRef<HTMLDivElement>(null);
   const openGestureRef = useRef(false); // true while the finger that opened the menu is still down (its release must not click the menu)
   const tabBarRef = useRef<HTMLDivElement>(null);
+  const [barH, setBarH] = useState(TAB_BAR_H); // real height of the tab bar (grows when tabs wrap onto a second line on phones)
+  useEffect(() => {
+    const el = tabBarRef.current;
+    if (!el) return;
+    const measure = () => setBarH(Math.max(TAB_BAR_H, Math.round(el.getBoundingClientRect().height)));
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   const colorInputRef = useRef<HTMLInputElement>(null);
   const marqueeRef = useRef<HTMLDivElement>(null);
   const selBoxRef = useRef<HTMLDivElement>(null);
@@ -1614,8 +1630,18 @@ export default function Home() {
         .pie-text { fill: var(--fg); }
         .pie-center { fill: var(--pie-bg); stroke: var(--border); stroke-width: 1; }
 
-        .tab-scroll { scrollbar-width: none; }
+        .tabbar { display: flex; align-items: flex-end; height: ${TAB_BAR_H}px; padding: 0 10px; }
+        .tab-scroll { display: flex; align-items: flex-end; gap: 3px; flex: 1; min-width: 0; height: 100%; overflow-x: auto; scrollbar-width: none; }
         .tab-scroll::-webkit-scrollbar { display: none; }
+        .theme-btn { align-self: center; margin-left: 10px; }
+        /* Phones: tabs wrap onto as many lines as they need instead of scrolling sideways */
+        @media (max-width: 700px) {
+          .tabbar { height: auto; min-height: ${TAB_BAR_H}px; align-items: flex-start; padding: 6px 10px; }
+          .tab-scroll { flex-wrap: wrap; height: auto; overflow: visible; align-items: center; gap: 4px; }
+          .tab-item { height: 28px; border-radius: 8px; border-bottom: 1px solid transparent; }
+          .tab-sep { display: none; }
+          .theme-btn { align-self: flex-start; margin-left: 8px; }
+        }
         .tab-item {
           display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 14px;
           border-radius: 8px 8px 0 0; font-size: 13px; white-space: nowrap; flex-shrink: 0;
@@ -1657,7 +1683,7 @@ export default function Home() {
         style={{
           position: "absolute",
           left: 0,
-          top: TAB_BAR_H,
+          top: barH,
           padding: "20px 36px",
           pointerEvents: "none",
           zIndex: 1,
@@ -1836,7 +1862,7 @@ export default function Home() {
             position: "absolute",
             left: 0,
             right: 0,
-            top: TAB_BAR_H,
+            top: barH,
             bottom: 0,
             overflowY: "auto",
             padding: "28px 32px 64px",
@@ -1846,7 +1872,7 @@ export default function Home() {
           }}
         >
           {portfolioTab.kind === "maps" ? (
-            <Maps key={portfolioTab.id} tab={portfolioTab} topInset={TAB_BAR_H} />
+            <Maps key={portfolioTab.id} tab={portfolioTab} topInset={barH} />
           ) : (
             <Bento key={portfolioTab.id} tab={portfolioTab} />
           )}
@@ -1856,33 +1882,19 @@ export default function Home() {
       {/* Tab bar */}
       <div
         ref={tabBarRef}
+        className="tabbar"
         style={{
           position: "fixed",
           top: 0,
           left: 0,
           right: 0,
-          height: TAB_BAR_H,
-          display: "flex",
-          alignItems: "flex-end",
-          padding: "0 10px",
           background: "var(--bar)",
           borderBottom: "1px solid var(--border)",
           zIndex: 6,
           userSelect: "none",
         }}
       >
-        <div
-          className="tab-scroll"
-          style={{
-            display: "flex",
-            alignItems: "flex-end",
-            gap: 3,
-            flex: 1,
-            minWidth: 0,
-            height: "100%",
-            overflowX: "auto",
-          }}
-        >
+        <div className="tab-scroll">
           {canvasTabEl(canvases[0])}
 
           {PORTFOLIO.length > 0 && <span className="tab-sep" />}
@@ -1909,12 +1921,23 @@ export default function Home() {
           </button>
         </div>
 
+        {RESUME_URL && (
+          <a
+            className="icon-btn theme-btn clickable"
+            href={RESUME_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ width: "auto", padding: "0 10px", fontSize: 12, textDecoration: "none", whiteSpace: "nowrap" }}
+          >
+            {RESUME_LABEL} ↗
+          </a>
+        )}
+        
         <button
-          className="icon-btn clickable"
+          className="icon-btn theme-btn clickable"
           onClick={toggleTheme}
           title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
           aria-label="Toggle light and dark mode"
-          style={{ alignSelf: "center", marginLeft: 10 }}
         >
           {theme === "dark" ? (
             <svg

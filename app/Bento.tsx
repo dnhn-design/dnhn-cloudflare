@@ -1,8 +1,14 @@
 import { useEffect, useState } from "react";
-import type { BentoTab } from "./portfolio";
+import type { BentoItem, BentoProject, BentoTab } from "./portfolio";
 
-// Renders one portfolio tab as a bento grid. Content lives in portfolio.ts.
-export default function Bento({ tab }: { tab: BentoTab }) {
+// ---- Knobs --------------------------------------------------------------
+const PROJECT_GAP = 72; // px of space between one project and the next
+const HEADER_GAP = 20; // px between a project's title line and its grid
+const COLLAPSE_MS = 280; // how long opening / closing takes
+// -------------------------------------------------------------------------
+
+// One bento grid (the tiles of a single project)
+function BentoGrid({ items }: { items: BentoItem[] }) {
   const [openIdx, setOpenIdx] = useState<number | null>(null);
 
   // Close the PDF dialog when clicking elsewhere or pressing Esc
@@ -23,8 +29,110 @@ export default function Bento({ tab }: { tab: BentoTab }) {
   }, []);
 
   return (
+    <div className="bento">
+      {items.map((item, i) => {
+        const w = item.w ?? 1;
+        const h = item.h ?? 1;
+        const span = { gridColumn: "span " + w, gridRow: "span " + h };
+
+        if (item.type === "text") {
+          return (
+            <div key={i} className="bento-tile bento-text" style={span}>
+              {item.title && <h3>{item.title}</h3>}
+              {item.body && <p>{item.body}</p>}
+            </div>
+          );
+        }
+
+        const hasPdf = !!item.pdf;
+        const isOpen = openIdx === i;
+        const toggle = () => setOpenIdx(isOpen ? null : i);
+
+        return (
+          <div
+            key={i}
+            className={"bento-tile" + (hasPdf ? " has-link clickable" : "")}
+            style={span}
+            data-open-tile={isOpen ? "" : undefined}
+            onClick={hasPdf ? toggle : undefined}
+            role={hasPdf ? "button" : undefined}
+            tabIndex={hasPdf ? 0 : undefined}
+            onKeyDown={
+              hasPdf
+                ? (e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      toggle();
+                    }
+                  }
+                : undefined
+            }
+          >
+            {item.src ? (
+              <img src={item.src} alt={item.alt ?? item.label ?? ""} draggable={false} style={{ objectFit: item.fit ?? "cover" }} />
+            ) : (
+              <div className="bento-ph">
+                <span>{item.label ?? "Image"}</span>
+              </div>
+            )}
+
+            {hasPdf && !isOpen && <div className="bento-badge">PDF ↗</div>}
+
+            {hasPdf && isOpen && (
+              <div className="bento-pop" onClick={(e) => e.stopPropagation()}>
+                <div className="bento-pop-title">{item.label ?? item.alt ?? "Project"}</div>
+                <a className="bento-pop-link clickable" href={item.pdf} target="_blank" rel="noopener noreferrer">
+                  {(item.pdfLabel ?? "Open PDF") + " ↗"}
+                </a>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// One project: a title line with a chevron, and the grid underneath that folds away
+function Project({ project, tabId, index, showHeader }: { project: BentoProject; tabId: string; index: number; showHeader: boolean }) {
+  const [open, setOpen] = useState(!project.collapsed);
+  const bodyId = "bento-" + tabId + "-" + index;
+
+  // A project without a title is just a plain grid (nothing to fold)
+  if (!showHeader)
+    return (
+      <section className="bento-project">
+        <BentoGrid items={project.items} />
+      </section>
+    );
+
+  return (
+    <section className={"bento-project" + (open ? "" : " is-collapsed")}>
+      <button type="button" className="bento-head clickable" onClick={() => setOpen((o) => !o)} aria-expanded={open} aria-controls={bodyId}>
+        <span className="bento-head-title">{project.title}</span>
+        <span className="bento-head-rule" aria-hidden="true" />
+        <svg className="bento-chevron" width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+          <path d="M4 7l5 5 5-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+      <div id={bodyId} className="bento-body">
+        <div className="bento-body-inner">
+          <BentoGrid items={project.items} />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+// Renders one portfolio tab. Content lives in portfolio.ts.
+export default function Bento({ tab }: { tab: BentoTab }) {
+  // `projects` is the new form; a plain `items` list still works (one project, no title line)
+  const projects: BentoProject[] = (tab.projects ?? (tab.items ? [{ items: tab.items }] : [])).filter((p) => p.items.length > 0);
+
+  return (
     <>
       <style>{`
+        .bento-wrap { max-width: 1240px; margin: 0 auto; }
         .bento {
           display: grid;
           grid-template-columns: repeat(4, 1fr);
@@ -121,78 +229,43 @@ export default function Bento({ tab }: { tab: BentoTab }) {
           from { opacity: 0; transform: translateY(6px); }
           to { opacity: 1; transform: translateY(0); }
         }
+
+        /* Collapsible projects */
+        .bento-project + .bento-project { margin-top: ${PROJECT_GAP}px; }
+        .bento-head {
+          display: flex;
+          align-items: center;
+          gap: 18px;
+          width: 100%;
+          margin: 0 0 ${HEADER_GAP}px;
+          padding: 6px 0;
+          background: none;
+          border: 0;
+          color: var(--fg);
+          font: inherit;
+          text-align: left;
+        }
+        .bento-head-title { font-size: 17px; font-weight: 650; letter-spacing: -0.005em; }
+        .bento-head-rule { flex: 1; height: 1px; background: var(--border); }
+        .bento-chevron { flex: none; color: var(--muted); transform: rotate(180deg); transition: transform ${COLLAPSE_MS}ms ease, color 0.15s; }
+        .bento-head:hover .bento-chevron { color: var(--fg); }
+        .bento-head:focus-visible { outline: 2px solid var(--fg); outline-offset: 4px; border-radius: 4px; }
+        .is-collapsed .bento-chevron { transform: rotate(0deg); }
+        .is-collapsed .bento-head { margin-bottom: 0; }
+
+        /* The grid folds away smoothly. Padding / negative margin keep hover shadows from being cut off. */
+        .bento-body { display: grid; grid-template-rows: 1fr; transition: grid-template-rows ${COLLAPSE_MS}ms ease; }
+        .bento-body-inner { min-height: 0; overflow: hidden; padding: 8px 28px 44px; margin: -8px -28px -44px; }
+        .is-collapsed .bento-body { grid-template-rows: 0fr; visibility: hidden; transition: grid-template-rows ${COLLAPSE_MS}ms ease, visibility 0s ${COLLAPSE_MS}ms; }
+        @media (prefers-reduced-motion: reduce) {
+          .bento-body, .is-collapsed .bento-body, .bento-chevron { transition: none; }
+        }
       `}</style>
 
-      <div className="bento">
-        {tab.items.map((item, i) => {
-          const w = item.w ?? 1;
-          const h = item.h ?? 1;
-          const span = { gridColumn: "span " + w, gridRow: "span " + h };
-
-          if (item.type === "text") {
-            return (
-              <div key={i} className="bento-tile bento-text" style={span}>
-                {item.title && <h3>{item.title}</h3>}
-                {item.body && <p>{item.body}</p>}
-              </div>
-            );
-          }
-
-          const hasPdf = !!item.pdf;
-          const isOpen = openIdx === i;
-          const toggle = () => setOpenIdx(isOpen ? null : i);
-
-          return (
-            <div
-              key={i}
-              className={"bento-tile" + (hasPdf ? " has-link clickable" : "")}
-              style={span}
-              data-open-tile={isOpen ? "" : undefined}
-              onClick={hasPdf ? toggle : undefined}
-              role={hasPdf ? "button" : undefined}
-              tabIndex={hasPdf ? 0 : undefined}
-              onKeyDown={
-                hasPdf
-                  ? (e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        toggle();
-                      }
-                    }
-                  : undefined
-              }
-            >
-              {item.src ? (
-                <img
-                  src={item.src}
-                  alt={item.alt ?? item.label ?? ""}
-                  draggable={false}
-                  style={{ objectFit: item.fit ?? "cover" }}
-                />
-              ) : (
-                <div className="bento-ph">
-                  <span>{item.label ?? "Image"}</span>
-                </div>
-              )}
-
-              {hasPdf && !isOpen && <div className="bento-badge">PDF ↗</div>}
-
-              {hasPdf && isOpen && (
-                <div className="bento-pop" onClick={(e) => e.stopPropagation()}>
-                  <div className="bento-pop-title">{item.label ?? item.alt ?? "Project"}</div>
-                  <a
-                    className="bento-pop-link clickable"
-                    href={item.pdf}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    {(item.pdfLabel ?? "Open PDF") + " ↗"}
-                  </a>
-                </div>
-              )}
-            </div>
-          );
-        })}
+      <div className="bento-wrap">
+        {projects.map((p, i) => (
+          <Project key={i} project={p} tabId={tab.id} index={i} showHeader={!!p.title} />
+        ))}
       </div>
     </>
   );

@@ -69,11 +69,18 @@ export type MapItem = {
 };
 
 // A normal bento tab (images, text, PDF links)
+export type BentoProject = {
+  title?: string; // heading on the divider line (leave out for a plain grid)
+  collapsed?: boolean; // start folded
+  items: BentoItem[];
+};
+
 export type BentoTab = {
   id: string; // unique, no spaces
   title: string; // shown on the tab
   kind?: "bento";
-  items: BentoItem[];
+  projects?: BentoProject[]; // up to two works best
+  items?: BentoItem[]; // older single-grid form: still supported
 };
 
 // A maps tab (zoomable / pannable PDFs). Rendered by Maps.tsx
@@ -93,46 +100,119 @@ export const PORTFOLIO: PortfolioTab[] = [
   {
     id: "type",
     title: "Type Design",
-    items: [
-      { w: 2, h: 2, label: "Hero project", pdf: "/pdfs/example.pdf", pdfLabel: "View case study" },
+    projects: [
       {
-        type: "text",
-        w: 2,
-        title: "About this collection",
-        body: "A short paragraph about this group of projects: the clients, the problem you solved, and the thinking behind the work. Replace this with your own words.",
+        title: "Unit of Type",
+        items: [
+          { w: 2, h: 2, label: "Hero project", src: "/images/type1/type2x2.png"},
+          {
+            type: "text",
+            w: 2,
+            title: "About this typeface",
+            body: "Unit is a modular display typeface inspired by the careful engineering of woodworking where complex shapes are created by piecing together simple building blocks.",
+          },
+          { label: "Packaging", src: "/images/type1/type1_1x1.png" },
+          { w: 1, h: 2, label: "Poster", src:"/images/type1/type1x2.png" },
+          { w: 2, label: "Wide banner", src:"/images/type1/type2x1.png" },
+          { label: "Detail", src:"images/type1/type3_1x1.png"},
+          { label: "Detail", src:"/images/type1/type2_1x1.png" },
+          { label: "Detail", src:"/images/type1/type4_1x1.png" }
+        ],
       },
-      { label: "Logo" },
-      { label: "Packaging", pdf: "/pdfs/example.pdf" },
-      { h: 2, label: "Poster" },
-      { w: 2, label: "Wide banner" },
-      { label: "Detail" },
-      { label: "Mockup" },
+      {
+        title: "Type Explorations",
+        items: [
+          {
+            type: "text",
+            w: 1,
+            title: "About this collection",
+            body: "Various Exploration of Typefaces, Lettering, and Typography.",
+          },
+          { w:2, h:2, label: "Image", src:"images/type2/meat.png"},
+          { h:2, label: "Image", src:"images/type2/polar.png"},
+          { label: "Image", src:"images/type2/segment.png"},
+          { h:2, label: "Image", src:"images/type2/brush.png"},
+          { label: "Image", src:"images/type2/vine.png"},
+          { h:2,label: "Image", src:"images/type2/slant.png"},
+          { label: "Image", src:"images/type2/test.png"},
+          { h:2, label: "Image", src:"images/type2/bold.png"},
+          { label: "Image", src:"images/type2/curl.png"},
+        ],
+      }
     ],
   },
+
   {
     id: "branding",
     title: "Branding",
-    items: [
-      { w: 2, label: "Landing page", pdf: "/pdfs/example.pdf" },
-      { label: "Mobile" },
-      { label: "Component" },
-      { type: "text", h: 2, title: "Process", body: "Briefly describe how you approach web projects: research, wireframes, build, launch." },
-      { w: 2, h: 2, label: "Dashboard" },
-      { label: "Icon set" },
-      { label: "Prototype", pdf: "/pdfs/example.pdf" },
+    projects: [
+      {
+        title: "Brand x Product x World",
+        items: [
+          { w: 2, h: 2, label: "Hero project", pdf: "/pdfs/example.pdf", pdfLabel: "View case study" },
+          {
+            type: "text",
+            w: 2,
+            title: "About this collection",
+            body: "A short paragraph about this group of projects: the clients, the problem you solved, and the thinking behind the work. Replace this with your own words.",
+          },
+          { label: "Logo" },
+          { label: "Packaging", pdf: "/pdfs/example.pdf" },
+          { h: 2, label: "Poster" },
+          { w: 2, label: "Wide banner" },
+          { label: "Detail" },
+          { label: "Mockup" },
+        ],
+      },
+      {
+        title: "Parachute Brooklyn",
+        items: [
+          { w: 2, label: "Wide image" },
+          { label: "Detail" },
+          { label: "Detail" },
+          { label: "Detail" },
+          { w: 3, h: 2, label: "Detail" },
+          { label: "Detail" }
+        ],
+      }
     ],
   },
+
+
   {
     id: "product",
     title: "Product Design",
-    items: [
-      { h: 2, label: "Editorial" },
-      { w: 2, h: 2, label: "Book cover", pdf: "/pdfs/example.pdf", pdfLabel: "Open full PDF" },
-      { label: "Spread" },
-      { label: "Flyer" },
-      { type: "text", w: 2, title: "Notes", body: "Print work, from editorial layouts to posters. Add a line about materials, formats or collaborators." },
-      { label: "Poster" },
-      { label: "Card" },
+    projects: [
+      {
+        title: "NYC Neighborhood Works",
+        items: [
+          { w: 2, h: 2, label: "Presentation", src: "/images/prod1/2_2x2.png", pdf: "https://www.figma.com/deck/N2O2Drd7t1MSJkh509aNBt/Hackathon-FA26-Slide-deck-file?node-id=5-59&viewport=-170%2C-71%2C0.77&t=4I9Oqlp550qFPhtR-1&scaling=min-zoom&content-scaling=fixed&page-id=0%3A1", pdfLabel: "Open Presentation"},
+          {
+            type: "text",
+            w: 2,
+            title: "About this Project",
+            body: "A product design project from participating in Design for Good Hackathon at SVA. Won 3rd Place. The product is helps New Yorkers get paid to take care of your community and keep our neighborhoods dry. Team: Shakibul Alum, Anyi Cai, Donghoon Yi.",
+          },
+          { h: 2, label: "Poster", src: "/images/prod1/prod1_1x2.png" },
+          { h: 2, label: "Poster", src: "/images/prod1/prod2_1x2.png" },
+          { w: 2, h: 2, label: "image", src: "/images/prod1/3_2x2.png" },
+          { w: 2, h: 2, label: "image", src: "/images/prod1/1_2x2.png" }
+        ],
+      },
+      {
+        title: "Minimal Apps",
+        items: [
+          { w: 2, h: 2, label: "image", src: "/images/prod2/2x2_1.png" },
+          { w: 2, h: 2, label: "image", src: "/images/prod2/2x2_2.png" },
+          { w: 2, h: 2, label: "image", src: "/images/prod2/2x2_3.png" },
+          {
+            type: "text",
+            w: 2,
+            title: "About this Project",
+            body: "In the age of AI where execution has been democratized, I wanted to create apps that are intentional from the groundup that solves real issue with minimal, intentional interactions.",
+          }
+        ],
+      }
     ],
   },
 
