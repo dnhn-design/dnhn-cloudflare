@@ -49,6 +49,7 @@ export type BentoItem = {
   alt?: string;
   label?: string;
   fit?: "cover" | "contain";
+  position?: string;
   pdf?: string;
   pdfLabel?: string;
 
@@ -114,9 +115,10 @@ export const PORTFOLIO: PortfolioTab[] = [
           { label: "Packaging", src: "/images/type1/type1_1x1.png" },
           { w: 1, h: 2, label: "Poster", src:"/images/type1/type1x2.png" },
           { w: 2, label: "Wide banner", src:"/images/type1/type2x1.png" },
+          { label: "Detail", src:"/images/type1/type4_1x1.png" },
           { label: "Detail", src:"images/type1/type3_1x1.png"},
           { label: "Detail", src:"/images/type1/type2_1x1.png" },
-          { label: "Detail", src:"/images/type1/type4_1x1.png" }
+          { label: "Detail", src:"/images/type1/type5_1x1.png" }
         ],
       },
       {
@@ -137,6 +139,7 @@ export const PORTFOLIO: PortfolioTab[] = [
           { label: "Image", src:"images/type2/test.png"},
           { h:2, label: "Image", src:"images/type2/bold.png"},
           { label: "Image", src:"images/type2/curl.png"},
+          { label: "Image", src:"images/type2/test2.png"},
         ],
       }
     ],
@@ -161,18 +164,23 @@ export const PORTFOLIO: PortfolioTab[] = [
           { h: 2, label: "Poster" },
           { w: 2, label: "Wide banner" },
           { label: "Detail" },
-          { label: "Mockup" },
+          { label: "Mockup" }
         ],
       },
       {
         title: "Parachute Brooklyn",
         items: [
-          { w: 2, label: "Wide image" },
-          { label: "Detail" },
-          { label: "Detail" },
-          { label: "Detail" },
-          { w: 3, h: 2, label: "Detail" },
-          { label: "Detail" }
+          {
+            type: "text",
+            w: 4,
+            title: "About this rebrand",
+            body: "Parachute Brooklyn is a children's resale shop based in Greenpoint, Brooklyn, dedicated to reducing textile waste, promoting sustainable fashion, and make sustainable choices easy for families by offering affordable, curated secondhand clothing while promoting eco-conscious, thoughtful consumption habits. I refreshed their logo and visual identity through a careful typographic approach. This was a hypothetical rebranding assignment. It is not affiliated with any real client. The trademark or names do not belong to me.",
+          },
+          { label: "Detail", src:"images/brand2/1x1_1.png" },
+          { w: 2, h: 2, label: "Detail", src:"images/brand2/parachute.gif", position: "bottom"},
+          { label: "Detail", src:"images/brand2/1x1_2.png" },
+          { label: "Detail", src:"images/brand2/1x1_3.png" },
+          { label: "Detail", src:"images/brand2/1x1_4.png" }
         ],
       }
     ],
@@ -191,7 +199,7 @@ export const PORTFOLIO: PortfolioTab[] = [
             type: "text",
             w: 2,
             title: "About this Project",
-            body: "A product design project from participating in Design for Good Hackathon at SVA. Won 3rd Place. The product is helps New Yorkers get paid to take care of your community and keep our neighborhoods dry. Team: Shakibul Alum, Anyi Cai, Donghoon Yi.",
+            body: "A product design project from participating in Design for Good Hackathon at SVA. Won 3rd Place. The product concept helps New Yorkers get paid to take care of your community and keep our neighborhoods dry. Unaffiliated with NYC. Team: Shakibul Alum, Anyi Cai, Donghoon Yi.",
           },
           { h: 2, label: "Poster", src: "/images/prod1/prod1_1x2.png" },
           { h: 2, label: "Poster", src: "/images/prod1/prod2_1x2.png" },
@@ -211,6 +219,30 @@ export const PORTFOLIO: PortfolioTab[] = [
             title: "About this Project",
             body: "In the age of AI where execution has been democratized, I wanted to create apps that are intentional from the groundup that solves real issue with minimal, intentional interactions.",
           }
+        ],
+      }
+    ],
+  },
+
+  {
+    id: "other",
+    title: "Misc",
+    projects: [
+      {
+        title: "Other Work",
+        items: [
+          { w: 2, h: 2, label: "image", src: "/images/MISC/2x2_train.png",},
+          {
+            type: "text",
+            w: 2,
+            title: "About this collection",
+            body: "Paper model of NYC Subway cars. Trains are designed, printed, and folded by me. Any iconography and logos used are for realism purposes—any trademarks belong to their respective owners. This is created as personal project, and are for non-commercial purposes.",
+          },
+          { w: 2, label: "image", src: "/images/MISC/2x1_train.png" },
+          { label: "image", src: "/images/MISC/1x1_train_1.png" },
+          { label: "image", src: "/images/MISC/1x1_train_2.png" },
+          { w: 2, label: "image", src: "/images/MISC/2x1_train_2.png" },
+          { h: 2, w: 2, label: "image", src: "/images/MISC/2x2_train_2.png" }
         ],
       }
     ],

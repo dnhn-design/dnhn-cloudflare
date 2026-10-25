@@ -5,6 +5,12 @@ import type { BentoItem, BentoProject, BentoTab } from "./portfolio";
 const PROJECT_GAP = 72; // px of space between one project and the next
 const HEADER_GAP = 20; // px between a project's title line and its grid
 const COLLAPSE_MS = 280; // how long opening / closing takes
+const TABLET_MAX = 1024; // screens this wide (px) or narrower never crop pictures: 2 columns, height follows the picture
+// Desktop only: how a picture sits in its tile. "cover" fills the tile and trims the edges. "contain" shows the whole
+// picture with empty space around it. A single tile can override this with fit: "cover" | "contain" in portfolio.ts.
+const DESKTOP_FIT: "cover" | "contain" = "cover";
+const TABLET_FILL_GAPS = false; // false = tiles keep the order of the file (may leave an empty half row). true = a later half-width tile can move up to fill the gap
+const PHONE_MAX = 600; // screens this wide (px) or narrower get a single column
 // -------------------------------------------------------------------------
 
 // One bento grid (the tiles of a single project)
@@ -33,11 +39,16 @@ function BentoGrid({ items }: { items: BentoItem[] }) {
       {items.map((item, i) => {
         const w = item.w ?? 1;
         const h = item.h ?? 1;
-        const span = { gridColumn: "span " + w, gridRow: "span " + h };
+        const span = {
+          gridColumn: "span " + w,
+          gridRow: "span " + h,
+          // shape of an empty placeholder on phones, taken from its desktop proportions
+          ["--ph-aspect" as string]: String((299.5 * w + 14 * (w - 1)) / (170 * h + 14 * (h - 1))),
+        };
 
         if (item.type === "text") {
           return (
-            <div key={i} className="bento-tile bento-text" style={span}>
+            <div key={i} className={"bento-tile bento-text" + (w >= 2 ? " bento-wide" : "")} style={span}>
               {item.title && <h3>{item.title}</h3>}
               {item.body && <p>{item.body}</p>}
             </div>
@@ -45,13 +56,15 @@ function BentoGrid({ items }: { items: BentoItem[] }) {
         }
 
         const hasPdf = !!item.pdf;
+        // `pdf` can be a PDF file or any web link (Figma, Behance, a live site...). Wording follows what it is.
+        const isPdfFile = !!item.pdf && /\.pdf($|[?#])/i.test(item.pdf);
         const isOpen = openIdx === i;
         const toggle = () => setOpenIdx(isOpen ? null : i);
 
         return (
           <div
             key={i}
-            className={"bento-tile" + (hasPdf ? " has-link clickable" : "")}
+            className={"bento-tile" + (w >= 2 ? " bento-wide" : "") + (hasPdf ? " has-link clickable" : "")}
             style={span}
             data-open-tile={isOpen ? "" : undefined}
             onClick={hasPdf ? toggle : undefined}
@@ -69,20 +82,20 @@ function BentoGrid({ items }: { items: BentoItem[] }) {
             }
           >
             {item.src ? (
-              <img src={item.src} alt={item.alt ?? item.label ?? ""} draggable={false} style={{ objectFit: item.fit ?? "cover" }} />
+              <img src={item.src} alt={item.alt ?? item.label ?? ""} draggable={false} style={{ objectFit: item.fit ?? DESKTOP_FIT, objectPosition: item.position ?? "center" }} />
             ) : (
               <div className="bento-ph">
                 <span>{item.label ?? "Image"}</span>
               </div>
             )}
 
-            {hasPdf && !isOpen && <div className="bento-badge">PDF ↗</div>}
+            {hasPdf && !isOpen && <div className="bento-badge">{isPdfFile ? "PDF" : "Link"} ↗</div>}
 
             {hasPdf && isOpen && (
               <div className="bento-pop" onClick={(e) => e.stopPropagation()}>
                 <div className="bento-pop-title">{item.label ?? item.alt ?? "Project"}</div>
                 <a className="bento-pop-link clickable" href={item.pdf} target="_blank" rel="noopener noreferrer">
-                  {(item.pdfLabel ?? "Open PDF") + " ↗"}
+                  {(item.pdfLabel ?? (isPdfFile ? "Open PDF" : "Open link")) + " ↗"}
                 </a>
               </div>
             )}
@@ -132,19 +145,35 @@ export default function Bento({ tab }: { tab: BentoTab }) {
   return (
     <>
       <style>{`
-        .bento-wrap { max-width: 1240px; margin: 0 auto; }
+        .bento-wrap { max-width: 1240px; margin: 0 auto; container-type: inline-size; }
         .bento {
           display: grid;
           grid-template-columns: repeat(4, 1fr);
-          grid-auto-rows: 170px;
+          grid-auto-rows: 170px; /* fallback for very old browsers */
+          /* Row height scales with the column width, so every tile keeps the same shape as the window
+             gets narrower (no squashing). At the full 1240px width a row is 170px, as before. */
+          --gap: 14px;
+          --col: calc((100cqw - 3 * var(--gap)) / 4);
+          grid-auto-rows: calc(var(--col) * 0.5676);
           grid-auto-flow: dense;
-          gap: 14px;
+          gap: var(--gap);
           max-width: 1240px;
           margin: 0 auto;
         }
-        @media (max-width: 800px) {
-          .bento { grid-template-columns: repeat(2, 1fr); grid-auto-rows: 140px; }
-          .bento-tile { grid-column: auto !important; }
+        /* Tablets and phones (${TABLET_MAX}px and narrower): nothing is ever cropped. A tile is half the width
+           (w: 1) or the full width (w: 2 or more), and its height follows the picture's own shape.
+           Tiles stay in the order of the file. On desktop the w / h shapes you set in portfolio.ts are used as they are. */
+        @media (max-width: ${TABLET_MAX}px) {
+          .bento { grid-template-columns: repeat(2, 1fr); grid-auto-rows: auto; grid-auto-flow: ${TABLET_FILL_GAPS ? "dense" : "row"}; align-items: start; }
+          .bento-tile { grid-column: auto !important; grid-row: auto !important; }
+          .bento-tile.bento-wide { grid-column: 1 / -1 !important; }
+          .bento-tile img { height: auto; }
+          .bento-ph { height: auto; aspect-ratio: var(--ph-aspect, 16 / 9); }
+          .bento-text { overflow: visible; }
+        }
+        /* Phones only (${PHONE_MAX}px and narrower): a single column */
+        @media (max-width: ${PHONE_MAX}px) {
+          .bento { grid-template-columns: 1fr; }
         }
         .bento-tile {
           position: relative;
