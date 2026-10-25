@@ -18,12 +18,27 @@ export function links() {
 // Right-click the text on the page to edit it (edits last until the page is reloaded).
 // To change what everyone sees by default, change this line:
 const DEFAULT_GREETING = "Hello. My Name is Donghoon.";
-const GREETING_MAX_LENGTH = 120;
 
 // Small link in the top-right corner, next to the light / dark button.
 // Put your PDF in public/pdfs/ and set its path here. Use "" to hide the link.
 const RESUME_URL = "/pdfs/my_resume_2026.pdf";
-const RESUME_LABEL = "Resume";
+const RESUME_LABEL = "Résumé";
+// More text links like Resume ("Behance ↗", "Contact ↗"...). Add or remove lines freely. Use [] for none.
+// For an email, use url: "mailto:you@example.com".
+const TEXT_LINKS: { label: string; url: string }[] = [
+  
+];
+
+// Small icon links next to the Resume link. Add, remove or reorder lines freely.
+// icon: "instagram" or "link". url: where it goes. Use [] to hide them all.
+const ICON_LINKS: { icon: "instagram" | "link" | "email" | "linkedin"; url: string; label: string }[] = [
+  { icon: "link", url: "https://dnhn-design.github.io/portfolio/", label: "Archive" },
+  { icon: "instagram", url: "https://www.instagram.com/dnhn.design/", label: "Instagram" },
+  { icon: "email", url: "mailto:donghoon.yi.portfolio@gmail.com", label: "Email" },
+  { icon: "linkedin", url: "https://www.linkedin.com/in/donghoon-yi/", label: "LinkedIn" },
+
+];
+const GREETING_MAX_LENGTH = 120;
 
 // ---- Text physics (tweak the feel here) ----
 const RADIUS = 140;
@@ -1633,14 +1648,22 @@ export default function Home() {
         .tabbar { display: flex; align-items: flex-end; height: ${TAB_BAR_H}px; padding: 0 10px; }
         .tab-scroll { display: flex; align-items: flex-end; gap: 3px; flex: 1; min-width: 0; height: 100%; overflow-x: auto; scrollbar-width: none; }
         .tab-scroll::-webkit-scrollbar { display: none; }
-        .theme-btn { align-self: center; margin-left: 10px; }
+        
+        .theme-btn { align-self: center; }
+        .tab-tools { display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-left: 10px; flex: none; align-self: center; }
+        .tl-icon { order: 0; }
+        .tl-main { order: 1; }
+
         /* Phones: tabs wrap onto as many lines as they need instead of scrolling sideways */
         @media (max-width: 700px) {
           .tabbar { height: auto; min-height: ${TAB_BAR_H}px; align-items: flex-start; padding: 6px 10px; }
           .tab-scroll { flex-wrap: wrap; height: auto; overflow: visible; align-items: center; gap: 4px; }
           .tab-item { height: 28px; border-radius: 8px; border-bottom: 1px solid transparent; }
           .tab-sep { display: none; }
-          .theme-btn { align-self: flex-start; margin-left: 8px; }
+          
+          .tab-tools { flex-wrap: wrap; max-width: 42%; align-self: flex-start; margin-left: 8px; }
+          .tl-main { order: 0; }
+          .tl-icon { order: 1; }
         }
         .tab-item {
           display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 14px;
@@ -1921,6 +1944,61 @@ export default function Home() {
           </button>
         </div>
 
+        <div className="tab-tools">
+        {ICON_LINKS.map((l) => (
+          <a
+            key={l.url + l.icon}
+            className="icon-btn theme-btn tl-icon clickable"
+            href={l.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            title={l.label}
+            aria-label={l.label}
+            style={{ textDecoration: "none" }}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              {l.icon === "instagram" ? (
+                <>
+                  <rect x="3" y="3" width="18" height="18" rx="5" />
+                  <circle cx="12" cy="12" r="4" />
+                  <circle cx="17.5" cy="6.5" r="0.6" fill="currentColor" />
+                </>
+              ) : l.icon === "email" ? (
+                <>
+                  <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 12a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0Zm0 0c0 1.657 1.007 3 2.25 3S21 13.657 21 12a9 9 0 1 0-2.636 6.364M16.5 12V8.25" />
+                </>
+              ) : l.icon === "linkedin" ? (
+                <>
+                  <path
+                    fill="currentColor"
+                    stroke="none"
+                    transform="scale(0.2667)"
+                    d="M 83.349 0 H 6.651 C 2.978 0 0 2.887 0 6.447 v 77.106 C 0 87.114 2.978 90 6.651 90 h 76.698 C 87.022 90 90 87.114 90 83.553 V 6.447 C 90 2.887 87.022 0 83.349 0 z M 27.282 75.339 H 13.688 v -40.64 h 13.594 V 75.339 z M 20.485 29.151 h -0.088 c -4.562 0 -7.512 -3.121 -7.512 -7.021 c 0 -3.988 3.04 -7.022 7.69 -7.022 c 4.651 0 7.513 3.034 7.601 7.022 C 28.176 26.03 25.225 29.151 20.485 29.151 z M 76.299 75.339 H 62.707 V 53.598 c 0 -5.463 -1.968 -9.19 -6.887 -9.19 c -3.756 0 -5.992 2.513 -6.975 4.94 c -0.359 0.868 -0.447 2.081 -0.447 3.296 v 22.695 H 34.804 c 0 0 0.178 -36.826 0 -40.64 h 13.594 v 5.756 c 1.806 -2.769 5.036 -6.709 12.251 -6.709 c 8.944 0 15.65 5.808 15.65 18.291 V 75.339 z"
+                  />
+                </>
+              ) : (
+                <>
+                  <path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1" />
+                  <path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1" />
+                </>
+              )}
+            </svg>
+          </a>
+        ))}
+
+        {TEXT_LINKS.map((l) => (
+          <a
+            key={l.url + l.label}
+            className="icon-btn theme-btn tl-main clickable"
+            href={l.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ width: "auto", padding: "0 10px", fontSize: 12, textDecoration: "none", whiteSpace: "nowrap" }}
+          >
+            {l.label} ↗
+          </a>
+        ))}
+
         {RESUME_URL && (
           <a
             className="icon-btn theme-btn clickable"
@@ -1932,7 +2010,7 @@ export default function Home() {
             {RESUME_LABEL} ↗
           </a>
         )}
-        
+
         <button
           className="icon-btn theme-btn clickable"
           onClick={toggleTheme}
@@ -1967,6 +2045,7 @@ export default function Home() {
             </svg>
           )}
         </button>
+        </div>
       </div>
 
       {/* Brush size ring that follows the cursor (canvas tabs only) */}
