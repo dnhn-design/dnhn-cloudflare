@@ -150,21 +150,25 @@ export const PORTFOLIO: PortfolioTab[] = [
     title: "Branding",
     projects: [
       {
-        title: "Brand x Product x World",
+        title: "OBJECT / BRAND / WORLD",
         items: [
-          { w: 2, h: 2, label: "Hero project", pdf: "/pdfs/example.pdf", pdfLabel: "View case study" },
+          { w: 2, h: 2, src:"images/brand1/2x2_main.png", label: "Claude Artifact", pdf: "https://claude.ai/artifact/KJo2HPTZYkGfNBAc7dXh4o#top", pdfLabel: "View Website" },
           {
             type: "text",
             w: 2,
-            title: "About this collection",
-            body: "A short paragraph about this group of projects: the clients, the problem you solved, and the thinking behind the work. Replace this with your own words.",
+            title: "About this project",
+            body: "This 3-week design project guided us to create a product concept, brand identity, and a live website utilizing the capabilities of AI tools from a simple brief. My brief was a Desk-clock for Long-distance Relationship.",
           },
-          { label: "Logo" },
-          { label: "Packaging", pdf: "/pdfs/example.pdf" },
-          { h: 2, label: "Poster" },
-          { w: 2, label: "Wide banner" },
-          { label: "Detail" },
-          { label: "Mockup" }
+          { label: "Logo", src:"images/brand1/1x1_2.png" },
+          { label: "image", src:"images/brand1/1x1_1.png" },
+
+          { h: 2, label: "Poster", src:"images/brand1/1x2.png" },
+          { w: 2, label: "Wide banner", src:"images/brand1/2x1.png" },
+
+          { label: "Detail", src:"images/brand1/1x1_4.png" },
+          { label: "Mockup", src:"images/brand1/1x1_3.png" },
+
+          { w: 2, label: "Wide banner", src:"images/brand1/2x1-1.png" },
         ],
       },
       {
@@ -198,8 +202,8 @@ export const PORTFOLIO: PortfolioTab[] = [
           {
             type: "text",
             w: 2,
-            title: "About this Project",
-            body: "A product design project from participating in Design for Good Hackathon at SVA. Won 3rd Place. The product concept helps New Yorkers get paid to take care of your community and keep our neighborhoods dry. Unaffiliated with NYC. Team: Shakibul Alum, Anyi Cai, Donghoon Yi.",
+            title: "About this project",
+            body: "A product design project from participating in Fall 2026 'Design for Good' Hackathon at SVA. Won 3rd Place. The concept helps New Yorkers get paid to take care of their community and keep neighborhoods dry. Unaffiliated with NYC. Teammates: Shakibul Alum, Anyi Cai, Donghoon Yi.",
           },
           { h: 2, label: "Poster", src: "/images/prod1/prod1_1x2.png" },
           { h: 2, label: "Poster", src: "/images/prod1/prod2_1x2.png" },
@@ -216,7 +220,7 @@ export const PORTFOLIO: PortfolioTab[] = [
           {
             type: "text",
             w: 2,
-            title: "About this Project",
+            title: "About this project",
             body: "In the age of AI where execution has been democratized, I wanted to create apps that are intentional from the groundup that solves real issue with minimal, intentional interactions.",
           }
         ],

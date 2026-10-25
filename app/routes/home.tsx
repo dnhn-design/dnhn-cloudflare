@@ -17,7 +17,7 @@ export function links() {
 // ---- Greeting text (top-left) ----
 // Right-click the text on the page to edit it (edits last until the page is reloaded).
 // To change what everyone sees by default, change this line:
-const DEFAULT_GREETING = "Hello. My Name is Donghoon.";
+const DEFAULT_GREETING = "Hello. My Name is Donghoon! :D";
 
 // Small link in the top-right corner, next to the light / dark button.
 // Put your PDF in public/pdfs/ and set its path here. Use "" to hide the link.
