@@ -100,7 +100,7 @@ export type PortfolioTab = BentoTab | MapsTab;
 export const PORTFOLIO: PortfolioTab[] = [
   {
     id: "type",
-    title: "Type Design",
+    title: "Type",
     projects: [
       {
         title: "Unit of Type",
@@ -189,7 +189,7 @@ export const PORTFOLIO: PortfolioTab[] = [
 
   {
     id: "product",
-    title: "Product Design",
+    title: "Product",
     projects: [
       {
         title: "NYC Neighborhood Works",
