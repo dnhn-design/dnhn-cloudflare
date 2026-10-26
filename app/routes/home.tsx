@@ -38,6 +38,9 @@ const ICON_LINKS: { icon: "instagram" | "link" | "email" | "linkedin"; url: stri
   { icon: "linkedin", url: "https://www.linkedin.com/in/donghoon-yi/", label: "LinkedIn" },
 
 ];
+
+// Saved pictures are named dnhn-canvas-1.png, dnhn-canvas-2.png ... (the number restarts each time the page is opened).
+const SHOT_PREFIX = "dnhn-canvas-";
 const GREETING_MAX_LENGTH = 120;
 
 // ---- Text physics (tweak the feel here) ----
@@ -590,6 +593,80 @@ export default function Home() {
   const nextIdRef = useRef(2);
   const counterRef = useRef(1);
   const onCanvas = !activeTab.startsWith("p:");
+
+            // ---------- Save / copy the canvas as a picture ----------
+            const shotCountRef = useRef(1);
+            const shotTimerRef = useRef(0);
+            const [shotMode, setShotMode] = useState<"download" | "clipboard">("download");
+            const [shotMenu, setShotMenu] = useState(false);
+            const [shotNote, setShotNote] = useState("");
+            const flashNote = (t: string) => {
+              setShotNote(t);
+              window.clearTimeout(shotTimerRef.current);
+              shotTimerRef.current = window.setTimeout(() => setShotNote(""), 2200);
+            };
+            // Builds the picture: page background, then your drawing, then the greeting letters where they are right now.
+            const makeShot = (): Promise<Blob | null> => {
+              const canvas = canvasRef.current;
+              if (!canvas) return Promise.resolve(null);
+              const dpr = canvas.width / window.innerWidth;
+              const top = Math.round(barH * dpr); // leave out the strip under the tab bar
+              const out = document.createElement("canvas");
+              out.width = canvas.width;
+              out.height = canvas.height - top;
+              const c = out.getContext("2d");
+              if (!c) return Promise.resolve(null);
+              const bg = getComputedStyle(canvas.closest("main") ?? document.body).getPropertyValue("--bg").trim() || "#0b0b0f";
+              c.fillStyle = bg;
+              c.fillRect(0, 0, out.width, out.height);
+              c.drawImage(canvas, 0, top, canvas.width, canvas.height - top, 0, 0, out.width, out.height);
+              c.save();
+              c.scale(dpr, dpr);
+              c.translate(0, -barH);
+              textRef.current?.querySelectorAll<HTMLElement>("[data-char]").forEach((el) => {
+                const r = el.getBoundingClientRect();
+                const st = getComputedStyle(el);
+                const m = new DOMMatrix(st.transform === "none" ? undefined : st.transform);
+                c.save();
+                c.translate(r.left + r.width / 2, r.top + r.height / 2);
+                c.rotate(Math.atan2(m.b, m.a));
+                c.font = st.fontWeight + " " + st.fontSize + " " + st.fontFamily;
+                c.fillStyle = st.color;
+                c.textAlign = "center";
+                c.textBaseline = "middle";
+                c.fillText(el.textContent ?? "", 0, 0);
+                c.restore();
+              });
+              c.restore();
+              return new Promise((res) => out.toBlob(res, "image/png"));
+            };
+            const takeShot = async () => {
+              setShotMenu(false);
+              try {
+                if (shotMode === "clipboard") {
+                  const item = new ClipboardItem({ "image/png": makeShot().then((b) => b as Blob) });
+                  await navigator.clipboard.write([item]);
+                  flashNote("Copied to clipboard");
+                  return;
+                }
+                const blob = await makeShot();
+                if (!blob) throw new Error("no picture");
+                const name = SHOT_PREFIX + shotCountRef.current + ".png";
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = name;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                setTimeout(() => URL.revokeObjectURL(url), 2000);
+                shotCountRef.current += 1;
+                flashNote("Saved " + name);
+              } catch {
+                flashNote(shotMode === "clipboard" ? "Copy was blocked. Try Download." : "Couldn't save the picture");
+              }
+            };
+
   const onCanvasRef = useRef(true);
   onCanvasRef.current = onCanvas;
 
@@ -1900,6 +1977,67 @@ export default function Home() {
             <Bento key={portfolioTab.id} tab={portfolioTab} />
           )}
         </div>
+      )}
+
+
+            {/* Save / copy picture button (bottom-left, canvas tabs only) */}
+            {onCanvas && (
+        <>
+          {shotMenu && <div style={{ position: "fixed", inset: 0, zIndex: 3 }} onPointerDown={() => setShotMenu(false)} />}
+          <div
+            onContextMenu={(e) => e.stopPropagation()}
+            style={{ position: "fixed", left: 16, bottom: "calc(16px + env(safe-area-inset-bottom, 0px))", zIndex: 4, display: "flex", alignItems: "center", gap: 2 }}
+          >
+            <button
+              className="icon-btn clickable"
+              onClick={takeShot}
+              title={shotMode === "download" ? "Save the drawing as a picture" : "Copy the drawing as a picture"}
+              aria-label="Capture the drawing"
+              style={{ borderRadius: "8px 3px 3px 8px", border: "1px solid var(--border)" }}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 8h3l2-3h6l2 3h3v11H4z" />
+                <circle cx="12" cy="13.5" r="3.5" />
+              </svg>
+            </button>
+            <button
+              className="icon-btn clickable"
+              onClick={() => setShotMenu((o) => !o)}
+              aria-label="Capture options"
+              aria-expanded={shotMenu}
+              style={{ width: 20, borderRadius: "3px 8px 8px 3px", border: "1px solid var(--border)" }}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" style={{ transform: shotMenu ? "none" : "rotate(180deg)" }}>
+                <path d="M6 15l6-6 6 6" />
+              </svg>
+            </button>
+            {shotMenu && (
+              <div
+                style={{
+                  position: "absolute", left: 0, bottom: "calc(100% + 8px)", minWidth: 190, padding: 4, borderRadius: 10,
+                  background: "var(--bar)", border: "1px solid var(--border)", backdropFilter: "blur(10px)", boxShadow: "0 10px 30px rgba(0,0,0,0.3)",
+                }}
+              >
+                {(["download", "clipboard"] as const).map((m) => (
+                  <button
+                    key={m}
+                    className="clickable"
+                    onClick={() => { setShotMode(m); setShotMenu(false); }}
+                    style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", padding: "8px 10px", border: 0, borderRadius: 7, background: shotMode === m ? "var(--panel)" : "transparent", color: "var(--fg)", font: "inherit", fontSize: 13, textAlign: "left" }}
+                  >
+                    <span style={{ width: 14 }}>{shotMode === m ? "✓" : ""}</span>
+                    {m === "download" ? "Download PNG" : "Copy to clipboard"}
+                  </button>
+                ))}
+              </div>
+            )}
+            {shotNote && (
+              <div style={{ position: "absolute", left: 0, bottom: "calc(100% + 8px)", padding: "6px 10px", borderRadius: 8, fontSize: 12, whiteSpace: "nowrap", background: "var(--bar)", border: "1px solid var(--border)", color: "var(--fg)", pointerEvents: "none" }}>
+                {shotNote}
+              </div>
+            )}
+          </div>
+        </>
       )}
 
       {/* Tab bar */}
