@@ -233,14 +233,14 @@ export const PORTFOLIO: PortfolioTab[] = [
     title: "Misc",
     projects: [
       {
-        title: "Other Work",
+        title: "NYC Subway Paper Models",
         items: [
           { w: 2, h: 2, label: "image", src: "/images/MISC/2x2_train.png",},
           {
             type: "text",
             w: 2,
             title: "About this collection",
-            body: "Paper model of NYC Subway cars. Trains are designed, printed, and folded by me. Any iconography and logos used are for realism purposes—any trademarks belong to their respective owners. This is created as personal project, and are for non-commercial purposes.",
+            body: "Trains are designed, printed, and folded by me. Any iconography and logos used are for realism purposes—any trademarks belong to their respective owners. This is created as personal project, and are for non-commercial purposes.",
           },
           { w: 2, label: "image", src: "/images/MISC/2x1_train.png" },
           { label: "image", src: "/images/MISC/1x1_train_1.png" },
@@ -248,7 +248,19 @@ export const PORTFOLIO: PortfolioTab[] = [
           { w: 2, label: "image", src: "/images/MISC/2x1_train_2.png" },
           { h: 2, w: 2, label: "image", src: "/images/MISC/2x2_train_2.png" }
         ],
-      }
+      },
+      {
+        title: "Data Viz Work(s)",
+        items: [
+          { w: 2, h: 2, label: "image", src: "/images/MISC/camera_data.png",},
+          {
+            type: "text",
+            w: 2,
+            title: "About this collection",
+            body: "Data Visualization works I have done, more coming soon.",
+          },
+        ],
+      },
     ],
   },
 
