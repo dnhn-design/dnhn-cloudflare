@@ -56,6 +56,10 @@ const WHEEL_COOLDOWN = 45; // min ms between changes (bigger = less momentum)
 const TAB_BAR_H = 38;
 
 // ---- Brush options ----
+// Calligraphy brush: a flat, broad nib held at a fixed angle.
+const CALLIGRAPHY_ANGLE = 30; // degrees of the nib edge above horizontal (30 is the classic broad-edge pen angle)
+const CALLIGRAPHY_NIB = 2; // nib width = brush size x this. Bigger = broader nib.
+
 const STYLES = [
   { id: "solid", label: "Solid" },
   { id: "neon", label: "Neon" },
@@ -63,6 +67,7 @@ const STYLES = [
   { id: "dotted", label: "Dotted" },
   { id: "dashed", label: "Dashed" },
   { id: "double", label: "Double" },
+  { id: "calligraphy", label: "Calligraphy" },
   { id: "line", label: "Line" },
   { id: "eraser", label: "Eraser" },
 ] as const;
@@ -113,6 +118,7 @@ function strokePad(b: Brush) {
   if (b.style === "eraser") r = b.size * 0.75;
   if (b.style === "double") r = b.size * 0.8 + Math.max(1, b.size / 3) / 2;
   if (b.style === "neon") r = b.size;
+  if (b.style === "calligraphy") r = (b.size * CALLIGRAPHY_NIB) / 2;
   return r + 1;
 }
 
@@ -423,6 +429,29 @@ function paintStroke(ctx: CanvasRenderingContext2D, b: Brush, pts: Pt[], seed: n
     case "line":
       strokeRound(ctx, pts, b.size);
       break;
+
+      case "calligraphy": {
+        // The nib is a short straight edge at a fixed angle. Dragging it sweeps a parallelogram per step:
+        // strokes along the nib's direction turn into hairlines, strokes across it are thick.
+        const a = (-CALLIGRAPHY_ANGLE * Math.PI) / 180;
+        const hx = (Math.cos(a) * b.size * CALLIGRAPHY_NIB) / 2;
+        const hy = (Math.sin(a) * b.size * CALLIGRAPHY_NIB) / 2;
+        ctx.lineWidth = 1; // keeps hairlines visible
+        ctx.lineJoin = "round";
+        const quad = (p: Pt, q: Pt) => {
+          ctx.beginPath();
+          ctx.moveTo(p.x + hx, p.y + hy);
+          ctx.lineTo(q.x + hx, q.y + hy);
+          ctx.lineTo(q.x - hx, q.y - hy);
+          ctx.lineTo(p.x - hx, p.y - hy);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+        };
+        if (pts.length === 1) quad(pts[0], pts[0]);
+        for (let i = 1; i < pts.length; i++) quad(pts[i - 1], pts[i]);
+        break;
+      }
 
     case "neon": {
       // One glow pass for the whole path, then a bright core on top: always solid
