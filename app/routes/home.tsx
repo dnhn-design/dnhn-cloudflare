@@ -107,7 +107,11 @@ const inkFor = (t: Theme) => (t === "dark" ? "#f5f5f7" : "#16161d");
 type Brush = { color: string; style: StyleId; size: number };
 type Pt = { x: number; y: number; w?: number }; // w (optional): thickness of the pen at this point, as a fraction of the brush size (the signature uses it)
 type Rect = { x0: number; y0: number; x1: number; y1: number };
-type StrokeOp = { kind: "stroke"; id: number; brush: Brush; seed: number; pts: Pt[] };
+// A filled outline (the signature). `d` is SVG path data; (x, y) is where the outline's bounding box sits on the canvas,
+// k = canvas pixels per path unit, (ox, oy) = where that bounding box starts inside the path's own coordinates.
+type ShapeFill = { d: string; x: number; y: number; k: number; ox: number; oy: number };
+// With `fill` set, the shape is what gets painted and `pts` (the pen's route) is only used to select / move it.
+type StrokeOp = { kind: "stroke"; id: number; brush: Brush; seed: number; pts: Pt[]; fill?: ShapeFill };
 type MoveOp = { kind: "move"; ids: number[]; dx: number; dy: number };
 type DeleteOp = { kind: "delete"; ids: number[] };
 type Op = StrokeOp | MoveOp | DeleteOp | { kind: "clear" };
@@ -439,6 +443,27 @@ function strokeFlat(ctx: CanvasRenderingContext2D, pts: Pt[], width: number) {
   ctx.stroke();
 }
 
+const shapeCache = new Map<string, Path2D>();
+function fillShape(ctx: CanvasRenderingContext2D, f: ShapeFill, color: string) {
+  let path = shapeCache.get(f.d);
+  if (!path) {
+    path = new Path2D(f.d);
+    shapeCache.set(f.d, path);
+  }
+  ctx.save();
+  ctx.fillStyle = color;
+  ctx.translate(f.x - f.ox * f.k, f.y - f.oy * f.k);
+  ctx.scale(f.k, f.k);
+  ctx.fill(path);
+  ctx.restore();
+}
+
+// Paints one recorded stroke (or filled shape)
+function paintOp(ctx: CanvasRenderingContext2D, st: StrokeOp, ink: string) {
+  if (st.fill) fillShape(ctx, st.fill, st.brush.color === "ink" ? ink : st.brush.color);
+  else paintStroke(ctx, st.brush, st.pts, st.seed, ink);
+}
+
 function paintStroke(ctx: CanvasRenderingContext2D, b: Brush, pts: Pt[], seed: number, ink: string) {
   if (pts.length === 0) return;
   const color = b.color === "ink" ? ink : b.color;
@@ -452,8 +477,7 @@ function paintStroke(ctx: CanvasRenderingContext2D, b: Brush, pts: Pt[], seed: n
 
   switch (b.style) {
     case "solid":
-      if (pts[0].w !== undefined) strokeVariable(ctx, pts, b.size);
-      else strokeRound(ctx, pts, b.size);
+      strokeRound(ctx, pts, b.size);
       break;
 
     case "eraser":
@@ -900,7 +924,9 @@ export default function Home() {
     let moving: { x0: number; y0: number; dx: number; dy: number } | null = null;
     let liveRaf = 0;
     let snap: HTMLCanvasElement | null = null; // the canvas as it was before the current stroke
-    let signing: { strokes: StrokeOp[]; partial: StrokeOp[]; raf: number } | null = null; // signature being written right now
+    // The signature while it is being written: `op` is the finished shape, `strokes` the pen's route, `partial` how far the pen got
+    let signing: { op: StrokeOp; strokes: StrokeOp[]; partial: StrokeOp[]; left: number; top: number; pw: number; ph: number; raf: number } | null = null;
+    let revealLayer: HTMLCanvasElement | null = null;
     let sigTimer = 0;
     let lpTimer = 0; // long-press timer (touch)
     let lpStart: Pt | null = null;
@@ -978,15 +1004,15 @@ export default function Home() {
         if (X !== 0 || Y !== 0) {
           ctx.save();
           ctx.translate(X, Y);
-          paintStroke(ctx, s.brush, s.pts, s.seed, col);
+          paintOp(ctx, s, col);
           ctx.restore();
         } else {
-          paintStroke(ctx, s.brush, s.pts, s.seed, col);
+          paintOp(ctx, s, col);
         }
       }
       // The signature while it is still being written (it joins the history once it is finished)
       if (signing && activeCanvasRef.current === "c1") {
-        for (const st of signing.partial) paintStroke(ctx, st.brush, st.pts, st.seed, col);
+        drawReveal(ctx, signing, col);
       }
     };
 
@@ -1034,6 +1060,37 @@ export default function Home() {
     };
 
     // ----- Signature -----
+    // The outline is revealed along the pen's route: paint the route thick, then keep the outline only where the route was
+    function drawReveal(target: CanvasRenderingContext2D, sg: NonNullable<typeof signing>, color: string) {
+      const dpr = window.devicePixelRatio || 1;
+      const pad = 12;
+      const x0 = Math.floor(sg.left) - pad;
+      const y0 = Math.floor(sg.top) - pad;
+      if (!revealLayer) revealLayer = document.createElement("canvas");
+      const w = Math.ceil((sg.pw + pad * 2) * dpr);
+      const h = Math.ceil((sg.ph + pad * 2) * dpr);
+      if (revealLayer.width !== w || revealLayer.height !== h) {
+        revealLayer.width = w;
+        revealLayer.height = h;
+      }
+      const lc = revealLayer.getContext("2d");
+      if (!lc || !sg.op.fill) return;
+      lc.setTransform(1, 0, 0, 1, 0, 0);
+      lc.clearRect(0, 0, w, h);
+      lc.setTransform(dpr, 0, 0, dpr, -x0 * dpr, -y0 * dpr);
+      lc.globalCompositeOperation = "source-over";
+      lc.fillStyle = "#000";
+      lc.strokeStyle = "#000";
+      for (const st of sg.partial) strokeVariable(lc, st.pts, st.brush.size);
+      lc.globalCompositeOperation = "source-in";
+      fillShape(lc, sg.op.fill, color);
+      lc.globalCompositeOperation = "source-over";
+      target.save();
+      target.setTransform(1, 0, 0, 1, 0, 0);
+      target.drawImage(revealLayer, x0 * dpr, y0 * dpr);
+      target.restore();
+    }
+
     // Strokes of the signature: they go into the history like any drawn stroke, so they can be
     // selected, moved, erased and undone. The popup joke fires when (almost) none of it is left.
     const SIG_SCALE = 0.25; // the "is it still there?" check runs on a quarter-size copy
@@ -1072,7 +1129,7 @@ export default function Home() {
         const paint = (it: { s: StrokeOp; ox: number; oy: number }) => {
           c.save();
           c.setTransform(SIG_SCALE, 0, 0, SIG_SCALE, it.ox * SIG_SCALE, it.oy * SIG_SCALE);
-          paintStroke(c, it.s.brush, it.s.pts, it.s.seed, "#000");
+          paintOp(c, it.s, "#000");
           c.restore();
         };
         items.forEach((it) => {
@@ -1105,13 +1162,13 @@ export default function Home() {
       if (!d) return;
       const sr = sigRef.current;
       const oldIds = [...sr.ids];
-      sr.ids = new Set(sg.strokes.map((st) => st.id));
+      sr.ids = new Set([sg.op.id]);
       sr.signed = true;
       sr.present = true;
       setSigToast(false);
       d.ops.length = d.cursor; // drop any redo history, like a normal stroke would
       if (oldIds.length) d.ops.push({ kind: "delete", ids: oldIds }); // signing again replaces what is left of the old one
-      for (const st of sg.strokes) d.ops.push(st);
+      d.ops.push(sg.op);
       d.cursor = d.ops.length;
       redraw();
       sync();
@@ -1127,17 +1184,25 @@ export default function Home() {
       const k = W / SIGNATURE.w;
       const left = vw - SIGNATURE_MARGIN - W;
       const top = vh - SIGNATURE_MARGIN - SIGNATURE.h * k;
-      const brush: Brush = { color: "ink", style: "solid", size: SIGNATURE.maxWidth * k }; // the thickest part; each point says how much of it to use
+      const routeBrush: Brush = { color: "ink", style: "solid", size: SIGNATURE.maxWidth * k }; // the thickest part of the route; each point says how much of it to use
       const strokes: StrokeOp[] = SIGNATURE.strokes.map((flat) => {
-        strokeIdRef.current += 1;
         const pts: Pt[] = [];
         for (let i = 0; i < flat.length; i += 3) {
           pts.push({ x: left + flat[i] * k, y: top + flat[i + 1] * k, w: flat[i + 2] / SIGNATURE.maxWidth });
         }
-        return { kind: "stroke", id: strokeIdRef.current, brush, seed: 1, pts };
+        return { kind: "stroke", id: 0, brush: routeBrush, seed: 1, pts };
       });
+      strokeIdRef.current += 1;
+      const op: StrokeOp = {
+        kind: "stroke",
+        id: strokeIdRef.current,
+        brush: { color: "ink", style: "solid", size: SIGNATURE.maxWidth * k },
+        seed: 1,
+        pts: strokes.flatMap((st) => st.pts), // the pen's route: this is what the select tool finds
+        fill: { d: SIGNATURE.path, x: left, y: top, k, ox: SIGNATURE.ox, oy: SIGNATURE.oy },
+      };
 
-      signing = { strokes, partial: [], raf: 0 };
+      signing = { op, strokes, partial: [], left, top, pw: SIGNATURE.w * k, ph: SIGNATURE.h * k, raf: 0 };
       if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
         finishSigning(); // no animation for people who asked for less motion
         return;
