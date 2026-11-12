@@ -2,6 +2,7 @@ import { Fragment, useEffect, useRef, useState } from "react";
 import Bento from "../Bento";
 import Maps from "../Maps";
 import { PORTFOLIO } from "../portfolio";
+import { SIGNATURE } from "../signature";
 
 export function meta() {
   return [{ title: "dnhn canvas" }];
@@ -54,6 +55,19 @@ const MAX_OFFSET = 28;
 const WHEEL_STEP = 40; // scroll distance needed per 1px change (bigger = slower)
 const WHEEL_COOLDOWN = 45; // min ms between changes (bigger = less momentum)
 const TAB_BAR_H = 38;
+
+// ---- Signature (signs itself in the bottom-right corner when the page opens) ----
+const SIGNATURE_ON = true; // false = no signature at all
+const SIGNATURE_DELAY = 900; // ms to wait after the page opens before it starts signing
+const SIGNATURE_DURATION = 1500; // ms the signing animation takes
+const SIGNATURE_WIDTH_VW = 12; // signature width as a % of the window width...
+const SIGNATURE_MIN_W = 96; // ...but never smaller than this (px)...
+const SIGNATURE_MAX_W = 180; // ...or bigger than this (px)
+const SIGNATURE_MARGIN = 36; // gap from the right and bottom edges (px). Matches the greeting's 36px side padding
+const SIGNATURE_GONE_BELOW = 0.5; // erasing it until less than this fraction of it is left counts as "deleted" (shows the joke popup)
+const SIGNATURE_JOKE = "Hey... that was my signature!";
+const SIGNATURE_JOKE_BUTTON = "Sign it again";
+const SIGNATURE_JOKE_MS = 7000; // how long the popup stays before it slides away by itself
 
 // ---- Brush options ----
 // Calligraphy brush: a flat, broad nib held at a fixed angle.
@@ -559,6 +573,7 @@ export default function Home() {
     refresh: () => {},
     deselect: () => {},
     deleteSelection: () => {},
+    resign: () => {},
   });
 
   // ---- Select tool ----
@@ -568,6 +583,16 @@ export default function Home() {
   const [sel, setSel] = useState<Selection | null>(null);
   const selRef = useRef<Selection | null>(null); // written by the drawing handlers
   const strokeIdRef = useRef(0);
+
+  // ---- Signature (see the SIGNATURE_* knobs at the top of the file) ----
+  const sigRef = useRef({ ids: new Set<number>(), signed: false, present: false }); // which strokes are the signature, and is it still there
+  const sigStartedRef = useRef(false); // the page-open signing only happens once
+  const [sigToast, setSigToast] = useState(false); // the "that was my signature" popup
+  useEffect(() => {
+    if (!sigToast) return;
+    const id = window.setTimeout(() => setSigToast(false), SIGNATURE_JOKE_MS);
+    return () => window.clearTimeout(id);
+  }, [sigToast]);
 
   // ---- Greeting text (right-click it, or long-press on a phone, to edit) ----
   const [greeting, setGreeting] = useState(DEFAULT_GREETING);
@@ -855,6 +880,8 @@ export default function Home() {
     let moving: { x0: number; y0: number; dx: number; dy: number } | null = null;
     let liveRaf = 0;
     let snap: HTMLCanvasElement | null = null; // the canvas as it was before the current stroke
+    let signing: { strokes: StrokeOp[]; partial: StrokeOp[]; raf: number } | null = null; // signature being written right now
+    let sigTimer = 0;
     let lpTimer = 0; // long-press timer (touch)
     let lpStart: Pt | null = null;
     let lastPtype = "mouse";
@@ -877,6 +904,7 @@ export default function Home() {
     const sync = () => {
       const d = cur();
       setHist({ undo: d.cursor > 0, redo: d.cursor < d.ops.length });
+      checkSignature();
     };
 
     const wipe = () => {
@@ -887,8 +915,7 @@ export default function Home() {
     };
 
     // Replays history up to the cursor: which strokes exist, and where they are now.
-    const resolve = () => {
-      const d = cur();
+    const resolve = (d: TabData = cur()) => {
       let start = 0;
       for (let i = d.cursor - 1; i >= 0; i--) {
         if (d.ops[i].kind === "clear") {
@@ -937,6 +964,10 @@ export default function Home() {
           paintStroke(ctx, s.brush, s.pts, s.seed, col);
         }
       }
+      // The signature while it is still being written (it joins the history once it is finished)
+      if (signing && activeCanvasRef.current === "c1") {
+        for (const st of signing.partial) paintStroke(ctx, st.brush, st.pts, st.seed, col);
+      }
     };
 
     // Live drawing: put back the picture from before the stroke, then paint the whole stroke
@@ -981,6 +1012,167 @@ export default function Home() {
       d.cursor = d.ops.length;
       sync();
     };
+
+    // ----- Signature -----
+    // Strokes of the signature: they go into the history like any drawn stroke, so they can be
+    // selected, moved, erased and undone. The popup joke fires when (almost) none of it is left.
+    const SIG_SCALE = 0.25; // the "is it still there?" check runs on a quarter-size copy
+    let sigCanvas: HTMLCanvasElement | null = null;
+
+    function checkSignature() {
+      const sg = sigRef.current;
+      if (!sg.signed) return;
+      const d = dataRef.current.get("c1");
+      if (!d) return;
+      const items = resolve(d);
+      let last = -1;
+      items.forEach((it, i) => {
+        if (sg.ids.has(it.s.id)) last = i;
+      });
+      let gone = last < 0; // deleted, cleared, or undone away
+      if (!gone) {
+        // Paint just the signature, then only the erasers used after it, and see how much is left
+        if (!sigCanvas) sigCanvas = document.createElement("canvas");
+        const w = Math.max(1, Math.ceil(window.innerWidth * SIG_SCALE));
+        const h = Math.max(1, Math.ceil(window.innerHeight * SIG_SCALE));
+        if (sigCanvas.width !== w || sigCanvas.height !== h) {
+          sigCanvas.width = w;
+          sigCanvas.height = h;
+        }
+        const c = sigCanvas.getContext("2d", { willReadFrequently: true });
+        if (!c) return;
+        c.setTransform(1, 0, 0, 1, 0, 0);
+        c.clearRect(0, 0, w, h);
+        const count = () => {
+          const px = c.getImageData(0, 0, w, h).data;
+          let n = 0;
+          for (let i = 3; i < px.length; i += 4) if (px[i] > 64) n++;
+          return n;
+        };
+        const paint = (it: { s: StrokeOp; ox: number; oy: number }) => {
+          c.save();
+          c.setTransform(SIG_SCALE, 0, 0, SIG_SCALE, it.ox * SIG_SCALE, it.oy * SIG_SCALE);
+          paintStroke(c, it.s.brush, it.s.pts, it.s.seed, "#000");
+          c.restore();
+        };
+        items.forEach((it) => {
+          if (sg.ids.has(it.s.id)) paint(it);
+        });
+        const before = count();
+        if (before > 0) {
+          items.forEach((it, i) => {
+            if (i > last && it.s.brush.style === "eraser") paint(it);
+          });
+          gone = count() < before * SIGNATURE_GONE_BELOW;
+        }
+      }
+      if (gone && sg.present) {
+        sg.present = false;
+        setSigToast(true);
+      } else if (!gone && !sg.present) {
+        sg.present = true;
+        setSigToast(false);
+      }
+    }
+
+    // Stop the animation (if it is running) and put the finished signature into the history
+    function finishSigning() {
+      const sg = signing;
+      if (!sg) return;
+      cancelAnimationFrame(sg.raf);
+      signing = null;
+      const d = dataRef.current.get("c1");
+      if (!d) return;
+      const sr = sigRef.current;
+      const oldIds = [...sr.ids];
+      sr.ids = new Set(sg.strokes.map((st) => st.id));
+      sr.signed = true;
+      sr.present = true;
+      setSigToast(false);
+      d.ops.length = d.cursor; // drop any redo history, like a normal stroke would
+      if (oldIds.length) d.ops.push({ kind: "delete", ids: oldIds }); // signing again replaces what is left of the old one
+      for (const st of sg.strokes) d.ops.push(st);
+      d.cursor = d.ops.length;
+      redraw();
+      sync();
+    }
+
+    // Writes the signature in the bottom-right corner, stroke by stroke
+    function startSigning() {
+      if (!SIGNATURE_ON) return;
+      finishSigning();
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const W = Math.min(SIGNATURE_MAX_W, Math.max(SIGNATURE_MIN_W, (vw * SIGNATURE_WIDTH_VW) / 100));
+      const k = W / SIGNATURE.w;
+      const left = vw - SIGNATURE_MARGIN - W;
+      const top = vh - SIGNATURE_MARGIN - SIGNATURE.h * k;
+      const brush: Brush = { color: "ink", style: "solid", size: SIGNATURE.width * k };
+      const strokes: StrokeOp[] = SIGNATURE.strokes.map((flat) => {
+        strokeIdRef.current += 1;
+        const pts: Pt[] = [];
+        for (let i = 0; i < flat.length; i += 2) pts.push({ x: left + flat[i] * k, y: top + flat[i + 1] * k });
+        return { kind: "stroke", id: strokeIdRef.current, brush, seed: 1, pts };
+      });
+
+      signing = { strokes, partial: [], raf: 0 };
+      if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        finishSigning(); // no animation for people who asked for less motion
+        return;
+      }
+
+      // Longer strokes get more of the time; a short pause lifts the pen between strokes
+      const GAP = 80;
+      const total = strokes.reduce((n, st) => n + st.pts.length, 0);
+      const drawMs = SIGNATURE_DURATION - GAP * (strokes.length - 1);
+      const spans: [number, number][] = [];
+      let t0 = 0;
+      for (const st of strokes) {
+        const dur = (drawMs * st.pts.length) / total;
+        spans.push([t0, t0 + dur]);
+        t0 += dur + GAP;
+      }
+      const startAt = performance.now();
+      const frame = (now: number) => {
+        const sg = signing;
+        if (!sg) return;
+        if (current || moving) {
+          sg.raf = requestAnimationFrame(frame); // someone is drawing right now: wait, don't repaint under their pen
+          return;
+        }
+        const t = now - startAt;
+        let done = true;
+        const partial: StrokeOp[] = [];
+        strokes.forEach((st, i) => {
+          const [a, b] = spans[i];
+          if (t <= a) {
+            done = false;
+            return;
+          }
+          const f = Math.min(1, (t - a) / (b - a));
+          if (f < 1) done = false;
+          const e = 0.5 * f + 0.5 * f * f * (3 - 2 * f); // pen speeds up, then eases off
+          const pos = e * (st.pts.length - 1);
+          const i0 = Math.floor(pos);
+          const pts = st.pts.slice(0, i0 + 1);
+          if (i0 < st.pts.length - 1) {
+            const fr = pos - i0;
+            const p0 = st.pts[i0];
+            const p1 = st.pts[i0 + 1];
+            pts.push({ x: p0.x + (p1.x - p0.x) * fr, y: p0.y + (p1.y - p0.y) * fr });
+          }
+          partial.push({ ...st, pts });
+        });
+        sg.partial = partial;
+        if (done) {
+          finishSigning();
+        } else {
+          redraw();
+          sg.raf = requestAnimationFrame(frame);
+        }
+      };
+      signing.raf = requestAnimationFrame(frame);
+    }
 
     // ----- Angle gizmo for the straight-line brush -----
     const GZ_LEN = 96;
@@ -1129,6 +1321,7 @@ export default function Home() {
 
     actionsRef.current = {
       undo: () => {
+        finishSigning();
         const d = cur();
         if (current || moving || d.cursor === 0) return;
         d.cursor -= 1;
@@ -1137,6 +1330,7 @@ export default function Home() {
         sync();
       },
       redo: () => {
+        finishSigning();
         const d = cur();
         if (current || moving || d.cursor >= d.ops.length) return;
         d.cursor += 1;
@@ -1145,6 +1339,7 @@ export default function Home() {
         sync();
       },
       clear: () => {
+        finishSigning();
         if (current || moving) return;
         commit({ kind: "clear" });
         setSelection(null);
@@ -1155,7 +1350,9 @@ export default function Home() {
         sync();
       },
       deselect: () => setSelection(null),
+      resign: () => startSigning(),
       deleteSelection: () => {
+        finishSigning();
         const s = selRef.current;
         if (!s || current || moving) return;
         commit({ kind: "delete", ids: s.ids });
@@ -1223,6 +1420,7 @@ export default function Home() {
     const onDown = (e: PointerEvent) => {
       if (!e.isPrimary || e.button !== 0 || e.ctrlKey || menuOpenRef.current || !onCanvasRef.current) return;
       if (editingRef.current) return; // first click while editing text just finishes the edit
+      finishSigning(); // touching the canvas while it is signing: it finishes instantly, then your stroke starts
       const p = { x: e.clientX, y: e.clientY };
       canvas.setPointerCapture(e.pointerId);
 
@@ -1473,7 +1671,18 @@ export default function Home() {
     window.addEventListener("pointercancel", onGlobalUp);
     window.addEventListener("keydown", onKey);
 
+    // Sign the canvas a beat after the page opens (once per visit)
+    if (SIGNATURE_ON && !sigStartedRef.current) {
+      sigTimer = window.setTimeout(() => {
+        sigStartedRef.current = true;
+        startSigning();
+      }, SIGNATURE_DELAY);
+    }
+
     return () => {
+      window.clearTimeout(sigTimer);
+      if (signing) cancelAnimationFrame(signing.raf);
+      signing = null;
       cancelAnimationFrame(liveRaf);
       cancelLongPress();
       window.removeEventListener("resize", resize);
@@ -1742,6 +1951,27 @@ export default function Home() {
         @keyframes pieIn {
           from { opacity: 0; transform: scale(0.7); }
           to { opacity: 1; transform: scale(1); }
+        }
+        @keyframes sigToastIn {
+          from { opacity: 0; transform: translate(-50%, 28px); }
+          to { opacity: 1; transform: translate(-50%, 0); }
+        }
+        .sig-toast {
+          position: fixed; left: 50%; bottom: calc(28px + env(safe-area-inset-bottom, 0px)); z-index: 7;
+          display: flex; align-items: center; gap: 12px; padding: 8px 8px 8px 18px; border-radius: 999px;
+          background: var(--bar); border: 1px solid var(--border); color: var(--fg);
+          backdrop-filter: blur(10px); box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+          font-size: 14px; white-space: nowrap; user-select: none;
+          animation: sigToastIn 0.4s cubic-bezier(0.2, 0.9, 0.3, 1.15) both;
+        }
+        .sig-toast button {
+          border: 0; border-radius: 999px; padding: 6px 12px; font: inherit; font-size: 13px;
+          background: var(--fg); color: var(--bg);
+        }
+        .sig-toast button.sig-x { background: transparent; color: var(--muted); padding: 6px 9px; }
+        .sig-toast button.sig-x:hover { color: var(--fg); }
+        @media (max-width: 600px) {
+          .sig-toast { bottom: calc(72px + env(safe-area-inset-bottom, 0px)); font-size: 13px; }
         }
         .pie-dark { fill: var(--pie-bg); stroke: var(--border); stroke-width: 1; transition: fill 0.12s; }
         .pie-dark:hover { fill: var(--pie-hover); }
@@ -2067,6 +2297,19 @@ export default function Home() {
             )}
           </div>
         </>
+      )}
+
+      {/* "Hey... that was my signature!" popup: slides up from the bottom when the signature is deleted or erased */}
+      {sigToast && onCanvas && (
+        <div className="sig-toast" role="status" onContextMenu={(e) => e.stopPropagation()}>
+          <span>{SIGNATURE_JOKE}</span>
+          <button className="clickable" onClick={() => actionsRef.current.resign()}>
+            {SIGNATURE_JOKE_BUTTON}
+          </button>
+          <button className="clickable sig-x" aria-label="Dismiss" onClick={() => setSigToast(false)}>
+            ✕
+          </button>
+        </div>
       )}
 
       {/* Tab bar */}
