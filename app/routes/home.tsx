@@ -60,9 +60,9 @@ const TAB_BAR_H = 38;
 const SIGNATURE_ON = true; // false = no signature at all
 const SIGNATURE_DELAY = 900; // ms to wait after the page opens before it starts signing
 const SIGNATURE_DURATION = 1500; // ms the signing animation takes
-const SIGNATURE_WIDTH_VW = 12; // signature width as a % of the window width...
-const SIGNATURE_MIN_W = 96; // ...but never smaller than this (px)...
-const SIGNATURE_MAX_W = 180; // ...or bigger than this (px)
+const SIGNATURE_WIDTH_VW = 13; // signature width as a % of the window width...
+const SIGNATURE_MIN_W = 104; // ...but never smaller than this (px)...
+const SIGNATURE_MAX_W = 200; // ...or bigger than this (px)
 const SIGNATURE_MARGIN = 36; // gap from the right and bottom edges (px). Matches the greeting's 36px side padding
 const SIGNATURE_GONE_BELOW = 0.5; // erasing it until less than this fraction of it is left counts as "deleted" (shows the joke popup)
 const SIGNATURE_JOKE = "Hey... that was my signature!";
@@ -105,7 +105,7 @@ type Theme = "dark" | "light";
 const inkFor = (t: Theme) => (t === "dark" ? "#f5f5f7" : "#16161d");
 
 type Brush = { color: string; style: StyleId; size: number };
-type Pt = { x: number; y: number };
+type Pt = { x: number; y: number; w?: number }; // w (optional): thickness of the pen at this point, as a fraction of the brush size (the signature uses it)
 type Rect = { x0: number; y0: number; x1: number; y1: number };
 type StrokeOp = { kind: "stroke"; id: number; brush: Brush; seed: number; pts: Pt[] };
 type MoveOp = { kind: "move"; ids: number[]; dx: number; dy: number };
@@ -304,6 +304,25 @@ function walkPath(pts: Pt[], spacing: number, fn: (x: number, y: number) => void
   }
 }
 
+// Round-capped line whose thickness changes along the way (each point's `w` x the brush size)
+function strokeVariable(ctx: CanvasRenderingContext2D, pts: Pt[], size: number) {
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  if (pts.length === 1) {
+    ctx.beginPath();
+    ctx.arc(pts[0].x, pts[0].y, (size * (pts[0].w ?? 1)) / 2, 0, Math.PI * 2);
+    ctx.fill();
+    return;
+  }
+  for (let i = 1; i < pts.length; i++) {
+    ctx.lineWidth = Math.max(0.5, (size * ((pts[i - 1].w ?? 1) + (pts[i].w ?? 1))) / 2);
+    ctx.beginPath();
+    ctx.moveTo(pts[i - 1].x, pts[i - 1].y);
+    ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.stroke();
+  }
+}
+
 // Round-capped line through the points (a dot if there is only one point)
 function strokeRound(ctx: CanvasRenderingContext2D, pts: Pt[], width: number) {
   if (pts.length === 1) {
@@ -433,7 +452,8 @@ function paintStroke(ctx: CanvasRenderingContext2D, b: Brush, pts: Pt[], seed: n
 
   switch (b.style) {
     case "solid":
-      strokeRound(ctx, pts, b.size);
+      if (pts[0].w !== undefined) strokeVariable(ctx, pts, b.size);
+      else strokeRound(ctx, pts, b.size);
       break;
 
     case "eraser":
@@ -1107,11 +1127,13 @@ export default function Home() {
       const k = W / SIGNATURE.w;
       const left = vw - SIGNATURE_MARGIN - W;
       const top = vh - SIGNATURE_MARGIN - SIGNATURE.h * k;
-      const brush: Brush = { color: "ink", style: "solid", size: SIGNATURE.width * k };
+      const brush: Brush = { color: "ink", style: "solid", size: SIGNATURE.maxWidth * k }; // the thickest part; each point says how much of it to use
       const strokes: StrokeOp[] = SIGNATURE.strokes.map((flat) => {
         strokeIdRef.current += 1;
         const pts: Pt[] = [];
-        for (let i = 0; i < flat.length; i += 2) pts.push({ x: left + flat[i] * k, y: top + flat[i + 1] * k });
+        for (let i = 0; i < flat.length; i += 3) {
+          pts.push({ x: left + flat[i] * k, y: top + flat[i + 1] * k, w: flat[i + 2] / SIGNATURE.maxWidth });
+        }
         return { kind: "stroke", id: strokeIdRef.current, brush, seed: 1, pts };
       });
 
@@ -1159,7 +1181,7 @@ export default function Home() {
             const fr = pos - i0;
             const p0 = st.pts[i0];
             const p1 = st.pts[i0 + 1];
-            pts.push({ x: p0.x + (p1.x - p0.x) * fr, y: p0.y + (p1.y - p0.y) * fr });
+            pts.push({ x: p0.x + (p1.x - p0.x) * fr, y: p0.y + (p1.y - p0.y) * fr, w: (p0.w ?? 1) + ((p1.w ?? 1) - (p0.w ?? 1)) * fr });
           }
           partial.push({ ...st, pts });
         });
