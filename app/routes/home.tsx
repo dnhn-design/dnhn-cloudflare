@@ -89,9 +89,7 @@ const TIP_MS = 10000; // how long the bar stays before it slides away by itself
 const TIP_TEXT = "Right-click for tools";
 const TIP_TEXT_TOUCH = "Long-press for tools";
 const TIP_BUTTON = "Show menu";
-// true = once someone has drawn (or opened the menu), they never see these hints again on that browser.
-// Set it to false to see them on every visit (handy while editing).
-const HINTS_REMEMBER = true;
+// Once someone has drawn (or opened the menu), reloading that same tab skips the hints. A new tab or session starts fresh.
 const HINTS_KEY = "dnhn-drew-before";
 
 // ---- Brush options ----
@@ -512,17 +510,16 @@ function penAt(strokes: StrokeOp[], spans: [number, number][], t: number) {
 
 function hintsSeen() {
   try {
-    return HINTS_REMEMBER && window.localStorage.getItem(HINTS_KEY) === "1";
+    return window.sessionStorage.getItem(HINTS_KEY) === "1";
   } catch {
     return false;
   }
 }
 function rememberHints() {
-  if (!HINTS_REMEMBER) return;
   try {
-    window.localStorage.setItem(HINTS_KEY, "1");
+    window.sessionStorage.setItem(HINTS_KEY, "1");
   } catch {
-    /* private window etc.: the hints just show again next time */
+    /* storage blocked: the hints just show again after a reload */
   }
 }
 
