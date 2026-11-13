@@ -3,6 +3,7 @@ import Bento from "../Bento";
 import Maps from "../Maps";
 import { PORTFOLIO } from "../portfolio";
 import { SIGNATURE } from "../signature";
+import { CTA } from "../cta";
 
 export function meta() {
   return [{ title: "dnhn canvas" }];
@@ -68,6 +69,28 @@ const SIGNATURE_GONE_BELOW = 0.5; // erasing it until less than this fraction of
 const SIGNATURE_JOKE = "Hey... that was my signature!";
 const SIGNATURE_JOKE_BUTTON = "Sign it again";
 const SIGNATURE_JOKE_MS = 7000; // how long the popup stays before it slides away by itself
+
+// ---- Hints for first-time visitors ----
+// 1) A pre-drawn "Draw here!" writes itself in the middle of the canvas right after the signature.
+// 2) After a visitor draws their first stroke, a small bar at the bottom tells them how to change tools.
+const CTA_ON = true; // false = no "Draw here!"
+const CTA_DELAY = 600; // ms after the signature finishes before it starts writing
+const CTA_DURATION = 1800; // ms the writing takes
+const CTA_COLOR = "#48dbfb"; // the same cyan as the default brush
+const CTA_WIDTH_VW = 14; // width as a % of the window width...
+const CTA_MIN_W = 150; // ...but never smaller than this (px)...
+const CTA_MAX_W = 230; // ...or bigger than this (px)
+const CTA_CENTER_X = 0.5; // where its middle sits, as a fraction of the window (0 = left / top, 1 = right / bottom)
+const CTA_CENTER_Y = 0.55;
+const CTA_MIN_PEN = 5; // thinnest pen (px) so the hint never gets hairline-thin on small screens
+const TIP_ON = true; // false = no tools bar
+const TIP_DELAY = 700; // ms after the first stroke before the bar slides up
+const TIP_MS = 10000; // how long the bar stays before it slides away by itself
+const TIP_TEXT = "Right-click for tools";
+const TIP_TEXT_TOUCH = "Long-press for tools";
+const TIP_BUTTON = "Show menu";
+// Once someone has drawn (or opened the menu), reloading that same tab skips the hints. A new tab or session starts fresh.
+const HINTS_KEY = "dnhn-drew-before";
 
 // ---- Brush options ----
 // Calligraphy brush: a flat, broad nib held at a fixed angle.
@@ -443,6 +466,63 @@ function strokeFlat(ctx: CanvasRenderingContext2D, pts: Pt[], width: number) {
   ctx.stroke();
 }
 
+// Pen animation shared by the signature and the hint. Longer strokes get more of the time; a short pause lifts the pen between strokes.
+function planPen(strokes: StrokeOp[], totalMs: number, gap: number) {
+  const weight = (st: StrokeOp) => Math.max(st.pts.length, 8);
+  const sum = strokes.reduce((n, st) => n + weight(st), 0);
+  const drawMs = totalMs - gap * (strokes.length - 1);
+  const spans: [number, number][] = [];
+  let t0 = 0;
+  for (const st of strokes) {
+    const dur = (drawMs * weight(st)) / sum;
+    spans.push([t0, t0 + dur]);
+    t0 += dur + gap;
+  }
+  return spans;
+}
+
+// How far each stroke has been drawn at time t (ms since the start)
+function penAt(strokes: StrokeOp[], spans: [number, number][], t: number) {
+  let done = true;
+  const partial: StrokeOp[] = [];
+  strokes.forEach((st, i) => {
+    const [a, b] = spans[i];
+    if (t <= a) {
+      done = false;
+      return;
+    }
+    const f = Math.min(1, (t - a) / (b - a));
+    if (f < 1) done = false;
+    const e = 0.5 * f + 0.5 * f * f * (3 - 2 * f); // pen speeds up, then eases off
+    const pos = e * (st.pts.length - 1);
+    const i0 = Math.floor(pos);
+    const pts = st.pts.slice(0, i0 + 1);
+    if (i0 < st.pts.length - 1) {
+      const fr = pos - i0;
+      const p0 = st.pts[i0];
+      const p1 = st.pts[i0 + 1];
+      pts.push({ x: p0.x + (p1.x - p0.x) * fr, y: p0.y + (p1.y - p0.y) * fr, w: (p0.w ?? 1) + ((p1.w ?? 1) - (p0.w ?? 1)) * fr });
+    }
+    partial.push({ ...st, pts });
+  });
+  return { partial, done };
+}
+
+function hintsSeen() {
+  try {
+    return window.sessionStorage.getItem(HINTS_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+function rememberHints() {
+  try {
+    window.sessionStorage.setItem(HINTS_KEY, "1");
+  } catch {
+    /* storage blocked: the hints just show again after a reload */
+  }
+}
+
 const shapeCache = new Map<string, Path2D>();
 function fillShape(ctx: CanvasRenderingContext2D, f: ShapeFill, color: string) {
   let path = shapeCache.get(f.d);
@@ -618,6 +698,7 @@ export default function Home() {
     deselect: () => {},
     deleteSelection: () => {},
     resign: () => {},
+    openMenuCenter: () => {},
   });
 
   // ---- Select tool ----
@@ -631,12 +712,18 @@ export default function Home() {
   // ---- Signature (see the SIGNATURE_* knobs at the top of the file) ----
   const sigRef = useRef({ ids: new Set<number>(), signed: false, present: false }); // which strokes are the signature, and is it still there
   const sigStartedRef = useRef(false); // the page-open signing only happens once
-  const [sigToast, setSigToast] = useState(false); // the "that was my signature" popup
+  // The little bar at the bottom: "that was my signature" joke, or the tools tip
+  const [toast, setToast] = useState<"sig" | "tips" | null>(null);
   useEffect(() => {
-    if (!sigToast) return;
-    const id = window.setTimeout(() => setSigToast(false), SIGNATURE_JOKE_MS);
+    if (!toast) return;
+    const id = window.setTimeout(() => setToast(null), toast === "sig" ? SIGNATURE_JOKE_MS : TIP_MS);
     return () => window.clearTimeout(id);
-  }, [sigToast]);
+  }, [toast]);
+  const touchedRef = useRef(false); // the visitor already put a finger / pen on the canvas
+  const firstDrawRef = useRef(false); // the visitor already drew a stroke
+  const menuSeenRef = useRef(false); // the visitor already opened the tools menu
+  const hintsOffRef = useRef(false); // this browser has seen the hints before
+  const ctaStartedRef = useRef(false); // "Draw here!" only writes once per page load
 
   // ---- Greeting text (right-click it, or long-press on a phone, to edit) ----
   const [greeting, setGreeting] = useState(DEFAULT_GREETING);
@@ -778,6 +865,13 @@ export default function Home() {
   brushRef.current = brush;
   const menuOpenRef = useRef(false);
   menuOpenRef.current = menu !== null;
+  // Opening the tools menu means they found it: drop the tip and don't show it again
+  useEffect(() => {
+    if (!menu) return;
+    menuSeenRef.current = true;
+    rememberHints();
+    setToast((t) => (t === "tips" ? null : t));
+  }, [menu]);
 
   // Load saved theme (or follow the system setting the first time)
   useEffect(() => {
@@ -927,6 +1021,9 @@ export default function Home() {
     // The signature while it is being written: `op` is the finished shape, `strokes` the pen's route, `partial` how far the pen got
     let signing: { op: StrokeOp; strokes: StrokeOp[]; partial: StrokeOp[]; left: number; top: number; pw: number; ph: number; raf: number } | null = null;
     let revealLayer: HTMLCanvasElement | null = null;
+    let writing: { strokes: StrokeOp[]; partial: StrokeOp[]; raf: number } | null = null; // "Draw here!" being written right now
+    let ctaTimer = 0;
+    let tipTimer = 0;
     let sigTimer = 0;
     let lpTimer = 0; // long-press timer (touch)
     let lpStart: Pt | null = null;
@@ -1013,6 +1110,9 @@ export default function Home() {
       // The signature while it is still being written (it joins the history once it is finished)
       if (signing && activeCanvasRef.current === "c1") {
         drawReveal(ctx, signing, col);
+      }
+      if (writing && activeCanvasRef.current === "c1") {
+        for (const st of writing.partial) paintStroke(ctx, st.brush, st.pts, st.seed, col);
       }
     };
 
@@ -1145,10 +1245,10 @@ export default function Home() {
       }
       if (gone && sg.present) {
         sg.present = false;
-        setSigToast(true);
+        setToast("sig");
       } else if (!gone && !sg.present) {
         sg.present = true;
-        setSigToast(false);
+        setToast((t) => (t === "sig" ? null : t));
       }
     }
 
@@ -1165,13 +1265,93 @@ export default function Home() {
       sr.ids = new Set([sg.op.id]);
       sr.signed = true;
       sr.present = true;
-      setSigToast(false);
+      setToast((t) => (t === "sig" ? null : t));
       d.ops.length = d.cursor; // drop any redo history, like a normal stroke would
       if (oldIds.length) d.ops.push({ kind: "delete", ids: oldIds }); // signing again replaces what is left of the old one
       d.ops.push(sg.op);
       d.cursor = d.ops.length;
       redraw();
       sync();
+      scheduleCta(CTA_DELAY); // "Draw here!" comes right after the signature
+    }
+
+    // ----- "Draw here!" hint -----
+    // Pre-drawn handwriting in the default brush colour. Its strokes go into the history, so it can be erased, selected and moved.
+    function finishCta() {
+      const w = writing;
+      if (!w) return;
+      cancelAnimationFrame(w.raf);
+      writing = null;
+      const d = dataRef.current.get("c1");
+      if (!d) return;
+      d.ops.length = d.cursor;
+      for (const st of w.strokes) d.ops.push(st);
+      d.cursor = d.ops.length;
+      redraw();
+      sync();
+    }
+
+    function finishAnimations() {
+      finishSigning();
+      finishCta();
+    }
+
+    function scheduleCta(ms: number) {
+      if (!CTA_ON || ctaStartedRef.current || touchedRef.current || hintsOffRef.current) return;
+      window.clearTimeout(ctaTimer);
+      ctaTimer = window.setTimeout(startCta, ms);
+    }
+
+    function startCta() {
+      if (!CTA_ON || ctaStartedRef.current || touchedRef.current || hintsOffRef.current) return;
+      ctaStartedRef.current = true;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const W = Math.min(CTA_MAX_W, Math.max(CTA_MIN_W, (vw * CTA_WIDTH_VW) / 100));
+      const k = W / CTA.w;
+      const left = vw * CTA_CENTER_X - W / 2;
+      const top = vh * CTA_CENTER_Y - (CTA.h * k) / 2;
+      const brush: Brush = { color: CTA_COLOR, style: "solid", size: Math.max(CTA_MIN_PEN, CTA.pen * k) };
+      const strokes: StrokeOp[] = CTA.strokes.map((flat) => {
+        strokeIdRef.current += 1;
+        const pts: Pt[] = [];
+        for (let i = 0; i < flat.length; i += 2) pts.push({ x: left + flat[i] * k, y: top + flat[i + 1] * k });
+        return { kind: "stroke", id: strokeIdRef.current, brush, seed: 1, pts };
+      });
+      writing = { strokes, partial: [], raf: 0 };
+      if (window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        finishCta();
+        return;
+      }
+      const spans = planPen(strokes, CTA_DURATION, 60);
+      const startAt = performance.now();
+      const frame = (now: number) => {
+        const w = writing;
+        if (!w) return;
+        if (current || moving) {
+          w.raf = requestAnimationFrame(frame);
+          return;
+        }
+        const r = penAt(strokes, spans, now - startAt);
+        w.partial = r.partial;
+        if (r.done) {
+          finishCta();
+        } else {
+          redraw();
+          w.raf = requestAnimationFrame(frame);
+        }
+      };
+      writing.raf = requestAnimationFrame(frame);
+    }
+
+    // The visitor's first real stroke: remember it, and a moment later show the tools tip
+    function onFirstDraw() {
+      if (firstDrawRef.current) return;
+      firstDrawRef.current = true;
+      rememberHints();
+      if (!TIP_ON || hintsOffRef.current || menuSeenRef.current) return;
+      window.clearTimeout(tipTimer);
+      tipTimer = window.setTimeout(() => setToast((t) => (t === null ? "tips" : t)), TIP_DELAY);
     }
 
     // Writes the signature in the bottom-right corner, stroke by stroke
@@ -1208,17 +1388,7 @@ export default function Home() {
         return;
       }
 
-      // Longer strokes get more of the time; a short pause lifts the pen between strokes
-      const GAP = 80;
-      const total = strokes.reduce((n, st) => n + st.pts.length, 0);
-      const drawMs = SIGNATURE_DURATION - GAP * (strokes.length - 1);
-      const spans: [number, number][] = [];
-      let t0 = 0;
-      for (const st of strokes) {
-        const dur = (drawMs * st.pts.length) / total;
-        spans.push([t0, t0 + dur]);
-        t0 += dur + GAP;
-      }
+      const spans = planPen(strokes, SIGNATURE_DURATION, 80);
       const startAt = performance.now();
       const frame = (now: number) => {
         const sg = signing;
@@ -1227,31 +1397,9 @@ export default function Home() {
           sg.raf = requestAnimationFrame(frame); // someone is drawing right now: wait, don't repaint under their pen
           return;
         }
-        const t = now - startAt;
-        let done = true;
-        const partial: StrokeOp[] = [];
-        strokes.forEach((st, i) => {
-          const [a, b] = spans[i];
-          if (t <= a) {
-            done = false;
-            return;
-          }
-          const f = Math.min(1, (t - a) / (b - a));
-          if (f < 1) done = false;
-          const e = 0.5 * f + 0.5 * f * f * (3 - 2 * f); // pen speeds up, then eases off
-          const pos = e * (st.pts.length - 1);
-          const i0 = Math.floor(pos);
-          const pts = st.pts.slice(0, i0 + 1);
-          if (i0 < st.pts.length - 1) {
-            const fr = pos - i0;
-            const p0 = st.pts[i0];
-            const p1 = st.pts[i0 + 1];
-            pts.push({ x: p0.x + (p1.x - p0.x) * fr, y: p0.y + (p1.y - p0.y) * fr, w: (p0.w ?? 1) + ((p1.w ?? 1) - (p0.w ?? 1)) * fr });
-          }
-          partial.push({ ...st, pts });
-        });
-        sg.partial = partial;
-        if (done) {
+        const r = penAt(strokes, spans, now - startAt);
+        sg.partial = r.partial;
+        if (r.done) {
           finishSigning();
         } else {
           redraw();
@@ -1408,7 +1556,7 @@ export default function Home() {
 
     actionsRef.current = {
       undo: () => {
-        finishSigning();
+        finishAnimations();
         const d = cur();
         if (current || moving || d.cursor === 0) return;
         d.cursor -= 1;
@@ -1417,7 +1565,7 @@ export default function Home() {
         sync();
       },
       redo: () => {
-        finishSigning();
+        finishAnimations();
         const d = cur();
         if (current || moving || d.cursor >= d.ops.length) return;
         d.cursor += 1;
@@ -1426,7 +1574,7 @@ export default function Home() {
         sync();
       },
       clear: () => {
-        finishSigning();
+        finishAnimations();
         if (current || moving) return;
         commit({ kind: "clear" });
         setSelection(null);
@@ -1438,8 +1586,17 @@ export default function Home() {
       },
       deselect: () => setSelection(null),
       resign: () => startSigning(),
+      openMenuCenter: () => {
+        const touch = lastPtype === "touch";
+        const R = touch ? PIE_R_TOUCH : PIE_R;
+        const x = Math.min(Math.max(window.innerWidth / 2, R), Math.max(window.innerWidth - R, R));
+        const y = Math.min(Math.max(window.innerHeight / 2, R), Math.max(window.innerHeight - R, R));
+        setSub(null);
+        setMenu({ x, y, touch });
+        setToast(null);
+      },
       deleteSelection: () => {
-        finishSigning();
+        finishAnimations();
         const s = selRef.current;
         if (!s || current || moving) return;
         commit({ kind: "delete", ids: s.ids });
@@ -1507,7 +1664,9 @@ export default function Home() {
     const onDown = (e: PointerEvent) => {
       if (!e.isPrimary || e.button !== 0 || e.ctrlKey || menuOpenRef.current || !onCanvasRef.current) return;
       if (editingRef.current) return; // first click while editing text just finishes the edit
-      finishSigning(); // touching the canvas while it is signing: it finishes instantly, then your stroke starts
+      touchedRef.current = true; // they found the canvas on their own: no need for "Draw here!"
+      window.clearTimeout(ctaTimer);
+      finishAnimations(); // touching the canvas while it is writing: it finishes instantly, then your stroke starts
       const p = { x: e.clientX, y: e.clientY };
       canvas.setPointerCapture(e.pointerId);
 
@@ -1604,7 +1763,10 @@ export default function Home() {
         const st = current;
         current = null;
         if (strokeIsEmpty(st)) redraw();
-        else commit(st);
+        else {
+          commit(st);
+          if (st.brush.style !== "eraser") onFirstDraw();
+        }
       }
 
       if (moving) {
@@ -1758,18 +1920,25 @@ export default function Home() {
     window.addEventListener("pointercancel", onGlobalUp);
     window.addEventListener("keydown", onKey);
 
-    // Sign the canvas a beat after the page opens (once per visit)
+    // Sign the canvas a beat after the page opens (once per visit). "Draw here!" follows the signature.
+    hintsOffRef.current = hintsSeen();
     if (SIGNATURE_ON && !sigStartedRef.current) {
       sigTimer = window.setTimeout(() => {
         sigStartedRef.current = true;
         startSigning();
       }, SIGNATURE_DELAY);
+    } else if (!SIGNATURE_ON) {
+      scheduleCta(SIGNATURE_DELAY);
     }
 
     return () => {
       window.clearTimeout(sigTimer);
+      window.clearTimeout(ctaTimer);
+      window.clearTimeout(tipTimer);
       if (signing) cancelAnimationFrame(signing.raf);
+      if (writing) cancelAnimationFrame(writing.raf);
       signing = null;
+      writing = null;
       cancelAnimationFrame(liveRaf);
       cancelLongPress();
       window.removeEventListener("resize", resize);
@@ -2386,14 +2555,17 @@ export default function Home() {
         </>
       )}
 
-      {/* "Hey... that was my signature!" popup: slides up from the bottom when the signature is deleted or erased */}
-      {sigToast && onCanvas && (
-        <div className="sig-toast" role="status" onContextMenu={(e) => e.stopPropagation()}>
-          <span>{SIGNATURE_JOKE}</span>
-          <button className="clickable" onClick={() => actionsRef.current.resign()}>
-            {SIGNATURE_JOKE_BUTTON}
+      {/* Bar that slides up from the bottom: the "that was my signature" joke, or the tools tip */}
+      {toast && onCanvas && (
+        <div key={toast} className="sig-toast" role="status" onContextMenu={(e) => e.stopPropagation()}>
+          <span>{toast === "sig" ? SIGNATURE_JOKE : touchUI ? TIP_TEXT_TOUCH : TIP_TEXT}</span>
+          <button
+            className="clickable"
+            onClick={() => (toast === "sig" ? actionsRef.current.resign() : actionsRef.current.openMenuCenter())}
+          >
+            {toast === "sig" ? SIGNATURE_JOKE_BUTTON : TIP_BUTTON}
           </button>
-          <button className="clickable sig-x" aria-label="Dismiss" onClick={() => setSigToast(false)}>
+          <button className="clickable sig-x" aria-label="Dismiss" onClick={() => setToast(null)}>
             ✕
           </button>
         </div>
