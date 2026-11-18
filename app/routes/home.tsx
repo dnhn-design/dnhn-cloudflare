@@ -28,13 +28,12 @@ const RESUME_LABEL = "Résumé";
 // More text links like Resume ("Behance ↗", "Contact ↗"...). Add or remove lines freely. Use [] for none.
 // For an email, use url: "mailto:you@example.com".
 const TEXT_LINKS: { label: string; url: string }[] = [
-  
+  { label: "Transit-pedia", url: "https://dnhn-design.github.io/portfolio/" }
 ];
 
 // Small icon links next to the Resume link. Add, remove or reorder lines freely.
 // icon: "instagram" or "link". url: where it goes. Use [] to hide them all.
 const ICON_LINKS: { icon: "instagram" | "link" | "email" | "linkedin"; url: string; label: string }[] = [
-  { icon: "link", url: "https://dnhn-design.github.io/portfolio/", label: "Archive" },
   { icon: "instagram", url: "https://www.instagram.com/dnhn.design/", label: "Instagram" },
   { icon: "email", url: "mailto:donghoon.yi.portfolio@gmail.com", label: "Email" },
   { icon: "linkedin", url: "https://www.linkedin.com/in/donghoon-yi/", label: "LinkedIn" },
