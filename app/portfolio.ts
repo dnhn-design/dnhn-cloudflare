@@ -233,6 +233,18 @@ export const PORTFOLIO: PortfolioTab[] = [
     title: "Misc",
     projects: [
       {
+        title: "Information design and data viz",
+        items: [
+          { w: 3, h: 3, label: "image", src: "/images/MISC/camera_data.png",},
+          // {
+          //   type: "text",
+          //   w: 2,
+          //   title: "About this collection",
+          //   body: "Data Visualization works I have done, more coming soon.",
+          // },
+        ],
+      },
+      {
         title: "NYC Subway Paper Models",
         items: [
           { w: 2, h: 2, label: "image", src: "/images/MISC/2x2_train.png",},
@@ -249,18 +261,7 @@ export const PORTFOLIO: PortfolioTab[] = [
           { h: 2, w: 2, label: "image", src: "/images/MISC/2x2_train_2.png" }
         ],
       },
-      {
-        title: "Data Viz Work(s)",
-        items: [
-          { w: 2, h: 2, label: "image", src: "/images/MISC/camera_data.png",},
-          {
-            type: "text",
-            w: 2,
-            title: "About this collection",
-            body: "Data Visualization works I have done, more coming soon.",
-          },
-        ],
-      },
+      
     ],
   },
 
@@ -280,12 +281,13 @@ export const PORTFOLIO: PortfolioTab[] = [
     kind: "maps",
     disclaimer:
       "An unofficial and unaffiliated personal project to design custom transit diagrams. Any names or iconography used are for informational purposes only. All trademarks belong to their respective owners.",
-    rows: [2, 1, 2, 2],
+    rows: [2, 1, 1, 2,2,2],
     aspect: { 1: "2 / 1.5", 2: "4 / 3" }, // tile shape for a full-width row and a two-up row
     maps: [
       { title: "NYC Subway", src: "/maps/subway-2026.pdf", bg:"000000"}, // replace with e.g. "/maps/my-map.pdf"
       { title: "North Jersey", src: "/maps/2026_NJ.pdf", bg:"000000"},
       { title: "NYC Area", src: "/maps/0719_NYC_rail.pdf", bg:"000000"}, // full width
+      { title: "Amtrak", src: "/maps/2026_Amtrak_2.pdf", bg:"000000"},
       { title: "Amtrak", src: "/maps/2026_Amtrak.pdf", bg:"000000"},
       { title: "San Francisco", src: "/maps/2026_BART.pdf", bg:"000000"},
       { title: "Chicago", src: "/maps/2026_Chicago.pdf", bg:"000000"},
